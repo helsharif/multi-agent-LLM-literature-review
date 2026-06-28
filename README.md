@@ -1,5 +1,7 @@
 # Multi-Agent LLM System for Automated Scientific Literature Review
 
+![Multi-Agent LLM System for Automated Scientific Literature Review](visuals/auto-lit-review-summary-image-optimized.png)
+
 A FastAPI and Next.js research automation app that uses selectable LLM backends, Scopus search, Zotero citation management, DOI verification, and AGU-style document export.
 
 ---
