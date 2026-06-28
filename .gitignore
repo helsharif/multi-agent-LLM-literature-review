@@ -1,12 +1,32 @@
+# Secrets and generated review artifacts
 secrets/
-__pycache__/
-*.pyc
+outputs/
+logs/*.tmp
+logs/*.log
+
+# Python
 .venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
 *.egg-info/
 .pytest_cache/
-outputs/
-~$*
+**/.pytest_cache/
+
+# Node / Next.js
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+
+# Local app / assistant state
+.codex/
+.claude/
 notes/
 
-node_modules/
-.next/
+# OS / editor noise
+.DS_Store
+Thumbs.db
+~$*

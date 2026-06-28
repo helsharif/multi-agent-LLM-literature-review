@@ -1,34 +1,199 @@
-# Auto Literature Review
+# Automated Literature Review App with Scopus, Zotero, and Selectable LLM Backends
 
-A local FastAPI and Next.js app for producing Scopus-grounded literature reviews with Zotero bibliography management. The workflow searches Scopus, drafts a structured review with a selectable LLM backend, verifies cited DOIs, saves verified papers to Zotero, exports an AGU bibliography, and writes the final review to `outputs/`.
+End-to-end research automation app that searches Scopus, synthesizes literature reviews with selectable LLM backends, verifies cited DOIs, saves verified papers to Zotero, and exports AGU-style review documents.
 
-## What It Does
+---
 
-Given a topic, search depth, output format, optional Zotero collection, and LLM backend, the app:
+## Project Highlights
 
-1. Creates or resumes a Zotero collection.
-2. Uses the selected LLM to create a concise Zotero collection title when no collection name is provided.
-3. Uses the selected LLM to decompose the topic into Scopus search subtopics.
-4. Searches Scopus for relevant papers and deduplicates by DOI.
-5. Uses the selected LLM to synthesize a narrative literature review.
-6. Parses the review's `CITED_DOIS` marker and verifies DOI existence in Scopus.
-7. Saves verified new papers to Zotero.
-8. Exports an AGU bibliography from Zotero.
-9. Saves the final Markdown review and supports DOCX/PDF download conversion.
+- **Task:** Automated scientific literature review generation
+- **Domain:** Hydrology, climate, infrastructure, and environmental literature review workflows
+- **Objective:** Reduce manual literature-review overhead while preserving citation traceability
+- **Core workflow:** Scopus search -> LLM synthesis -> DOI verification -> Zotero save -> AGU bibliography export
+- **LLM options:** Claude Code, OpenRouter Free Router, Gemini Flash, Qwen3 Coder, NVIDIA Nemotron Ultra, NVIDIA Nemotron Super
+- **Outputs:** Markdown, Word, and PDF review documents
+- **Provenance:** Final metadata records selected LLM backend, DOI verification count, Zotero collection, and assigned OpenRouter model when using `openrouter/free`
 
-## Prerequisites
+This project demonstrates practical GenAI application engineering: API integration, model fallback design, citation verification, document export, and a usable frontend for research workflows.
 
-- Python 3.12
-- Node.js and npm
-- Zotero desktop
-- Elsevier developer API key for Scopus and ScienceDirect
-- Zotero API key and numeric user ID
-- Claude Code CLI, only if using the Claude backend
-- OpenRouter API key, only if using OpenRouter-backed models
+---
 
-## Setup
+## Motivation & Problem Statement
 
-**1. Create the Python environment**
+Scientific literature reviews are slow to produce because they require several different kinds of work:
+
+- finding relevant papers
+- screening abstracts and metadata
+- synthesizing themes across studies
+- keeping citations grounded and traceable
+- formatting references consistently
+- saving reviewed papers to a citation manager
+
+Generic LLM chat workflows can draft prose quickly, but they often lose citation provenance, invent references, or fail to connect generated claims to verifiable source metadata.
+
+The goal of this project is to build a local research assistant that combines LLM synthesis with structured scholarly APIs and citation-management tooling. The app is designed to make literature review generation more repeatable, inspectable, and operationally useful.
+
+---
+
+## Application Screenshots
+
+### Review Setup Interface
+
+The user enters a research topic, selects an LLM backend, chooses search depth and output format, and optionally provides a Zotero collection name.
+
+![Auto Literature Review setup screen](visuals/auto-lit-review-gui-example.png)
+
+### Generated Review With Metadata
+
+The final report includes metadata for the run, including topic, backend LLM, papers reviewed, verified citations, and Zotero collection key.
+
+![Generated literature review metadata and executive summary](visuals/auto-lit-review-result-01.png)
+
+### Research Gaps and References
+
+The app produces thematic synthesis, research gaps, open questions, and an AGU-style bibliography exported from Zotero.
+
+![Generated research gaps and references](visuals/auto-lit-review-result-02.png)
+
+---
+
+## System Workflow
+
+```text
+User topic
+   |
+   v
+LLM-generated concise Zotero title
+   |
+   v
+LLM topic decomposition into Scopus subtopics
+   |
+   v
+Scopus search + DOI deduplication
+   |
+   v
+LLM literature review synthesis
+   |
+   v
+Parse CITED_DOIS marker
+   |
+   v
+Scopus DOI existence verification
+   |
+   v
+Save verified papers to Zotero
+   |
+   v
+Export AGU bibliography
+   |
+   v
+Markdown review + DOCX/PDF download
+```
+
+---
+
+## Key Features
+
+### Selectable LLM Backends
+
+The app lets the user choose the model provider per run:
+
+| UI Label | Backend ID | Notes |
+| --- | --- | --- |
+| Claude Code | `claude` | Uses local `claude -p`; requires Claude Code CLI authentication |
+| OpenRouter Free Router (auto) | `openrouter_free` | Uses `openrouter/free`; requests a free long-context text model suitable for literature synthesis |
+| Gemini 2.5 Flash (OpenRouter paid) | `gemini_flash` | Uses OpenRouter model `google/gemini-2.5-flash` |
+| Qwen3 Coder 480B A35B (free) | `qwen3_coder_free` | Uses OpenRouter model `qwen/qwen3-coder:free` |
+| NVIDIA Nemotron 3 Ultra (free) | `nemotron_ultra_free` | Uses OpenRouter model `nvidia/nemotron-3-ultra-550b-a55b:free` |
+| NVIDIA Nemotron 3 Super (free) | `nemotron_super_free` | Uses OpenRouter model `nvidia/nemotron-3-super-120b-a12b:free` |
+
+When `openrouter_free` is selected, the app records both the selected router and the model OpenRouter reports it assigned to the synthesis call.
+
+Example metadata:
+
+```markdown
+- **LLM backend:** OpenRouter Free Router (auto) (selected: openrouter/free; assigned: qwen/qwen3-coder:free)
+```
+
+### Citation Grounding
+
+The synthesis prompt requires a final `CITED_DOIS` marker. The backend parses this marker, verifies DOI existence through Scopus, and uses the verified paper set for Zotero saving and bibliography export.
+
+### Zotero Integration
+
+The app can:
+
+- create a new Zotero collection
+- resume an existing collection by name
+- skip duplicate DOIs already in the collection
+- add verified papers to Zotero
+- export a bibliography in American Geophysical Union style
+
+### Operational UX
+
+The local dev workflow includes:
+
+- automatic browser opening after `npm run dev`
+- terminal instructions for shutdown
+- live frontend progress updates
+- clearer API errors for stale servers, model limits, and non-stream responses
+- output filenames with brief topic, date, and backend code
+
+Example output filename:
+
+```text
+sebou-basin-climate-and-water-risk_2026-06-28_orfree.md
+```
+
+---
+
+## Tech Stack
+
+- **Frontend:** Next.js, React, Tailwind CSS
+- **Backend:** FastAPI, Python async workflow orchestration
+- **LLM backends:** Claude Code CLI, OpenRouter Chat Completions API
+- **Scholarly search:** Scopus API
+- **Citation manager:** Zotero API
+- **Documents:** Markdown, python-docx, WeasyPrint
+- **Dev tooling:** npm, concurrently, pytest
+
+---
+
+## Repository Structure
+
+```text
+.
+├── api/
+│   ├── main.py                        # FastAPI app, SSE /api/review, /api/download
+│   ├── workflow.py                    # Review workflow and selectable LLM backends
+│   └── convert.py                     # Markdown to DOCX/PDF conversion
+├── frontend/
+│   ├── app/page.tsx                   # Main UI and SSE consumer
+│   ├── components/ReviewForm.tsx      # Form, backend selector, run controls
+│   ├── components/ProgressPanel.tsx   # Live workflow progress
+│   ├── components/ReviewOutput.tsx    # Rendered review and download controls
+│   └── next.config.mjs                # Proxies /api/* to 127.0.0.1:8000
+├── mcp_servers/
+│   ├── scopus_mcp/server.py           # Scopus and ScienceDirect MCP server
+│   └── zotero_mcp/server.py           # Zotero MCP server
+├── prompts/
+│   └── lit_review_runtime_prompt.md   # Claude Code CLI prompt template
+├── scripts/
+│   ├── dev-instructions.js            # Prints localhost and Ctrl+C shutdown help
+│   └── open-dev-browser.js            # Opens localhost:3000 when ready
+├── visuals/                           # README screenshots
+├── outputs/                           # Generated reviews, gitignored
+├── secrets/                           # API keys, gitignored
+├── package.json
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## Local Setup
+
+### 1. Create the Python environment
 
 ```powershell
 py -3.12 -m venv .venv
@@ -36,16 +201,14 @@ py -3.12 -m venv .venv
 pip install -r requirements.txt
 ```
 
-**2. Install JavaScript dependencies**
-
-From the project root:
+### 2. Install JavaScript dependencies
 
 ```powershell
 npm install
 npm --prefix frontend install
 ```
 
-**3. Add secrets**
+### 3. Add API keys
 
 Create `secrets/keys.txt`:
 
@@ -56,13 +219,19 @@ ZOTERO_USER_ID=<your Zotero numeric user ID>
 OPENROUTER_API_KEY=<your OpenRouter API key, optional unless using OpenRouter backends>
 ```
 
-`secrets/keys.txt` is gitignored. Do not commit it.
+`secrets/keys.txt` is excluded from Git.
 
-**4. Install AGU citation style in Zotero**
+### 4. Install AGU citation style in Zotero
 
-In Zotero: Edit -> Settings -> Cite -> Styles -> Get additional styles, then search for and install `American Geophysical Union`.
+In Zotero, install the `American Geophysical Union` citation style:
 
-## Running The Web App
+```text
+Edit -> Settings -> Cite -> Styles -> Get additional styles
+```
+
+---
+
+## Running the App
 
 From the project root:
 
@@ -75,125 +244,55 @@ This starts:
 
 - FastAPI backend on `http://127.0.0.1:8000`
 - Next.js frontend on `http://localhost:3000`
-- A browser opener that waits for the frontend and opens it automatically
-- A short terminal help message with the shutdown instruction
+- automatic browser opening
+- terminal shutdown instructions
 
-To stop the app, press `Ctrl+C` in the terminal running `npm run dev`.
+To stop the app:
 
-If the browser does not open automatically, go to [http://localhost:3000](http://localhost:3000).
-
-## Web App Inputs
-
-- **Topic**: detailed research question or review scope.
-- **Search depth**: total target papers to retrieve across generated subtopics.
-- **LLM backend**: model/provider used for title generation, subtopic planning, and synthesis.
-- **Download format**: Markdown, DOCX, or PDF.
-- **Zotero collection**: optional. If provided, the app resumes or creates that exact collection name. If blank, the selected LLM generates a concise title.
-
-## LLM Backends
-
-| UI label | Backend ID | Notes |
-| --- | --- | --- |
-| Claude Code | `claude` | Uses local `claude -p`. Requires Claude Code CLI authentication. |
-| OpenRouter Free Router (auto) | `openrouter_free` | Uses `openrouter/free`. Adds routing hints requesting a free text model with large context, long-form synthesis, citation discipline, and structured DOI output. |
-| Gemini 2.5 Flash (OpenRouter paid) | `gemini_flash` | Uses OpenRouter model `google/gemini-2.5-flash`. Currently paid on OpenRouter. |
-| Qwen3 Coder 480B A35B (free) | `qwen3_coder_free` | Uses OpenRouter model `qwen/qwen3-coder:free`. |
-| NVIDIA Nemotron 3 Ultra (free) | `nemotron_ultra_free` | Uses OpenRouter model `nvidia/nemotron-3-ultra-550b-a55b:free`. |
-| NVIDIA Nemotron 3 Super (free) | `nemotron_super_free` | Uses OpenRouter model `nvidia/nemotron-3-super-120b-a12b:free`. |
-
-When `openrouter_free` is selected, final review metadata records both:
-
-- that `openrouter/free` was selected
-- the model OpenRouter reports it assigned to the synthesis call
-
-Example:
-
-```markdown
-- **LLM backend:** OpenRouter Free Router (auto) (selected: openrouter/free; assigned: qwen/qwen3-coder:free)
+```text
+Ctrl+C
 ```
 
-Free OpenRouter routes can hit upstream provider capacity limits. If you see `ResourceExhausted`, `rate limit`, or `Retry after`, wait briefly or choose another backend.
+---
 
-## Output
+## Outputs
 
-The app always saves the canonical review as Markdown:
+The app saves the canonical review as Markdown:
 
 ```text
 outputs/<brief-topic-slug>_<YYYY-MM-DD>_<llm-code>.md
 ```
 
-Example:
-
-```text
-outputs/sebou-basin-climate-and-water-risk_2026-06-28_orfree.md
-```
-
-The in-browser download button can convert that Markdown to:
+The browser download button can export:
 
 - Markdown (`.md`)
 - Word (`.docx`)
 - PDF (`.pdf`)
 
-Downloaded DOCX and PDF files use the same base name, for example `sebou-basin-climate-and-water-risk_2026-06-28_orfree.pdf`.
+The final review includes:
 
-The final document includes:
-
-- title and metadata
+- run metadata
 - executive summary
 - background and scope
-- thematic sections
+- thematic synthesis
 - key papers table
 - research gaps and open questions
-- AGU bibliography exported from Zotero
+- AGU bibliography
 
-Metadata includes date, original topic, LLM backend, papers reviewed, DOI verification count, replacements, unsupported claims, and Zotero collection key.
+---
 
-## Troubleshooting
+## Reproducibility & Best Practices
 
-**OpenRouter Free shows no OpenRouter activity**
+This project is designed around reproducible research automation:
 
-If the app immediately fails with a `422` error mentioning that `openrouter_free` is not allowed, an old FastAPI process is still running. Stop the app with `Ctrl+C`. If needed, stop stale listeners on ports `8000` and `3000`, then run `npm run dev` again.
+- API keys are isolated in `secrets/keys.txt`
+- generated outputs are excluded from Git
+- Zotero collection metadata is recorded in the final report
+- LLM backend and OpenRouter-assigned model are recorded in metadata
+- DOI verification is separated from prose generation
+- frontend, backend, and conversion logic are modularized
 
-**Claude session limit**
-
-If Claude fails with `Claude Code session limit reached`, wait until the reset time shown by Claude or rerun with an OpenRouter backend.
-
-**OpenRouter capacity errors**
-
-Free models can be temporarily overloaded by their upstream provider. Rerun after a short wait or choose another backend.
-
-**No progress appears**
-
-Restart `npm run dev` and hard refresh the browser. The frontend now reports non-stream API errors instead of silently spinning.
-
-**PDF export fails**
-
-PDF conversion uses `weasyprint` and `markdown`. If system PDF dependencies are missing on Windows, use Markdown or DOCX.
-
-## Claude Code CLI Workflow
-
-The web app does not require MCP. It calls Scopus and Zotero directly from Python.
-
-The original Claude Code CLI workflow is still documented in `CLAUDE.md` and `prompts/lit_review_runtime_prompt.md`. That mode uses the local MCP server definitions in `.mcp.json`.
-
-To verify MCP servers for the CLI workflow, run Claude Code in this project and use:
-
-```text
-/mcp
-```
-
-Both `scopus` and `zotero` should be connected.
-
-## MCP Servers
-
-| Server | File | Tools |
-| --- | --- | --- |
-| `scopus` | `mcp_servers/scopus_mcp/server.py` | `search_papers`, `get_abstract`, `verify_doi`, `get_full_text` |
-| `zotero` | `mcp_servers/zotero_mcp/server.py` | `create_collection`, `get_collection_key_by_name`, `get_collection_items`, `add_item`, `export_bibliography` |
-
-`get_full_text` uses the ScienceDirect API. A 403 response usually means the specific article is not covered by your institutional subscription.
-
-## Tests And Checks
+Recommended checks:
 
 ```powershell
 .venv\Scripts\activate
@@ -203,35 +302,55 @@ python -m py_compile api\workflow.py api\main.py
 npm --prefix frontend run build
 ```
 
-## Project Structure
+---
 
-```text
-├── package.json                       # Root dev script starts API, frontend, browser opener, and help message
-├── CLAUDE.md                          # Original Claude Code workflow instructions
-├── AGENTS.md                          # Codex/project instructions
-├── README.md                          # This file
-├── requirements.txt                   # Python dependencies
-├── secrets/keys.txt                   # API keys, gitignored
-├── .mcp.json                          # MCP server definitions for Claude Code CLI workflow
-├── api/
-│   ├── main.py                        # FastAPI app, SSE /api/review, /api/download
-│   ├── workflow.py                    # Python workflow and selectable LLM backends
-│   └── convert.py                     # Markdown to DOCX/PDF conversion
-├── frontend/
-│   ├── app/page.tsx                   # Main UI and SSE consumer
-│   ├── components/ReviewForm.tsx      # Review form and backend selector
-│   ├── components/ProgressPanel.tsx   # Live workflow progress
-│   ├── components/ReviewOutput.tsx    # Rendered review and download controls
-│   └── next.config.mjs                # Proxies /api/* to 127.0.0.1:8000
-├── mcp_servers/
-│   ├── scopus_mcp/server.py           # Scopus and ScienceDirect MCP server
-│   └── zotero_mcp/server.py           # Zotero MCP server
-├── prompts/
-│   └── lit_review_runtime_prompt.md   # CLI workflow prompt template
-├── scripts/
-│   ├── dev-instructions.js            # Prints localhost and Ctrl+C shutdown help
-│   └── open-dev-browser.js            # Waits for localhost:3000 and opens the browser
-├── outputs/                           # Generated Markdown reviews, gitignored
-├── logs/                              # Reserved for workflow logs
-└── docs/                              # Design notes and plans
+## Troubleshooting
+
+### Stale FastAPI Server
+
+If the UI reports a `422` error saying `openrouter_free` is not allowed, an old backend process is still running. Stop the app with `Ctrl+C`, make sure ports `8000` and `3000` are clear, and restart:
+
+```powershell
+npm run dev
 ```
+
+### Claude Session Limits
+
+If Claude fails with `Claude Code session limit reached`, wait until the reset time shown by Claude or switch to an OpenRouter backend.
+
+### OpenRouter Free Model Capacity
+
+Free OpenRouter routes can be temporarily overloaded by their upstream provider. If you see `ResourceExhausted`, `rate limit`, or `Retry after`, wait briefly or choose another backend.
+
+### PDF Export
+
+PDF conversion uses WeasyPrint. If PDF export fails due to system dependencies, use Markdown or DOCX.
+
+---
+
+## Portfolio Relevance
+
+This project highlights:
+
+- applied GenAI product engineering
+- scientific-literature automation
+- API integration with Scopus and Zotero
+- citation-grounded LLM workflow design
+- fallback model routing and LLM provenance tracking
+- FastAPI and Next.js full-stack development
+- practical document export and research workflow UX
+
+It builds on earlier multi-agent literature-review prototypes and productizes the workflow into a local web app with real scholarly-data integrations.
+
+---
+
+## Disclaimer
+
+This project is for research and portfolio demonstration purposes. Generated reviews should be manually checked before use in academic, regulatory, engineering, or policy decisions. Scopus, Zotero, Claude, OpenRouter, Gemini, Qwen, and NVIDIA model availability and terms may change over time.
+
+---
+
+## Author
+
+Husayn El Sharif  
+Senior Data Scientist / Machine Learning Engineer
