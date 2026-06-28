@@ -117,3 +117,11 @@ def test_export_bibliography_calls_zotero(creds):
     result = client.export_bibliography("ABCD1234", style="agu")
     mock_zot.collection_items.assert_called_once_with("ABCD1234", format="bib", style="agu")
     assert result == "<bib>Smith 2024</bib>"
+
+def test_export_bibliography_falls_back_to_json_for_non_string(creds):
+    mock_zot = MagicMock()
+    mock_zot.collection_items.return_value = [{"key": "ITEM0001", "data": {"title": "Test"}}]
+    client = ZoteroClient(creds, zot=mock_zot)
+    result = client.export_bibliography("ABCD1234", style="agu")
+    assert isinstance(result, str)
+    assert "ITEM0001" in result

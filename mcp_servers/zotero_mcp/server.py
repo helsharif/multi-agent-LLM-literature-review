@@ -48,15 +48,17 @@ class ZoteroClient:
             d = item.get("data", {})
             creators = d.get("creators", [])
             first_author = creators[0].get("lastName", "") if creators else ""
+            date = d.get("date", "")
             results.append({
                 "title": d.get("title", ""),
                 "doi": d.get("DOI", ""),
                 "first_author": first_author,
-                "year": d.get("date", "")[:4],
+                "year": date[:4] if len(date) >= 4 else date,
                 "zotero_key": item.get("key", ""),
             })
         return results
 
+    # Internal helper — not exposed as an MCP tool. Used to deduplicate before add_item.
     def search_library_by_doi(self, doi: str) -> dict | None:
         results = self.zot.items(q=doi)
         for item in results:
@@ -66,7 +68,8 @@ class ZoteroClient:
 
     def add_item(self, paper: dict, collection_key: str) -> str:
         template = self.zot.item_template("journalArticle")
-        last_name = paper.get("first_author", "").split(",")[0].strip()
+        first_author = paper.get("first_author", "")
+        last_name = first_author.split(",")[0].strip() if "," in first_author else first_author.split()[0].strip() if first_author else ""
         template["title"] = paper.get("title", "")
         template["DOI"] = paper.get("doi", "")
         template["date"] = paper.get("year", "")
@@ -82,6 +85,7 @@ class ZoteroClient:
         return items if isinstance(items, str) else json.dumps(items, indent=2)
 
 
+# Credentials are loaded once per process. Restart the server if API keys are rotated.
 _client: ZoteroClient | None = None
 
 
