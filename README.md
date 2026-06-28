@@ -45,6 +45,12 @@ The user enters a research topic, selects an LLM backend, chooses search depth a
 
 ![Auto Literature Review setup screen](visuals/auto-lit-review-gui-example.png)
 
+### Live Workflow Progress
+
+During generation, the frontend streams backend events so the user can monitor search, synthesis, verification, Zotero, and export steps as they complete.
+
+![Auto Literature Review running workflow progress](visuals/auto-lit-review-running-workflow-progress.png)
+
 ### Generated Review With Metadata
 
 The final report includes metadata for the run, including topic, backend LLM, papers reviewed, verified citations, and Zotero collection key.
