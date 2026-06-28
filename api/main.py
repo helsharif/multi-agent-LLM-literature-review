@@ -1,5 +1,6 @@
 """FastAPI entry point for the Auto Literature Review app."""
 import json
+import re
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -54,7 +55,18 @@ async def review(req: ReviewRequest) -> StreamingResponse:
 
 @app.get("/api/download/{filename}")
 async def download(filename: str, format: str = "md") -> Response:
-    md_path = OUTPUTS_DIR / f"{filename}.md"
+    # Reject any filename that isn't a plain slug (letters, digits, hyphens, underscores).
+    # This blocks path separators, dots, and null bytes before any filesystem access.
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Resolve the full path and confirm it stays inside OUTPUTS_DIR, defending
+    # against any symlink-based traversal that slips past the regex.
+    candidate = (OUTPUTS_DIR / f"{filename}.md").resolve()
+    if not candidate.is_relative_to(OUTPUTS_DIR.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    md_path = candidate
     if not md_path.exists():
         raise HTTPException(status_code=404, detail="Review file not found")
 
