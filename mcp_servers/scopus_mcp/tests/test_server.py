@@ -1,8 +1,6 @@
 import pytest
 import json
 from unittest.mock import patch, MagicMock
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from server import load_api_key, search_papers, get_abstract, verify_doi
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -104,3 +102,9 @@ def test_verify_doi_returns_false_when_not_found(mock_get):
         json=lambda: {"search-results": {"opensearch:totalResults": "0", "entry": []}}
     )
     assert verify_doi("10.9999/fake.doi", api_key="testkey") is False
+
+@patch("server.requests.get")
+def test_verify_doi_raises_on_server_error(mock_get):
+    mock_get.return_value = MagicMock(status_code=500)
+    with pytest.raises(RuntimeError, match="Scopus server error"):
+        verify_doi("10.1234/test.001", api_key="testkey")

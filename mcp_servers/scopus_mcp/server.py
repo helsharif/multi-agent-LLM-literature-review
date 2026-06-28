@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import requests
 from mcp.server import Server
@@ -67,6 +68,8 @@ def verify_doi(doi: str, api_key: str) -> bool:
     url = f"{SCOPUS_BASE}/search/scopus"
     params = {"query": f"DOI({doi})", "count": 1, "apiKey": api_key}
     resp = requests.get(url, params=params, timeout=30)
+    if resp.status_code >= 500:
+        raise RuntimeError(f"Scopus server error during DOI verification: HTTP {resp.status_code}")
     if resp.status_code != 200:
         return False
     total = resp.json().get("search-results", {}).get("opensearch:totalResults", "0")
@@ -115,19 +118,21 @@ async def list_tools() -> list[types.Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    import json
-    api_key = load_api_key()
-    if name == "search_papers":
-        result = search_papers(arguments["query"], arguments.get("limit", 20), api_key)
-        return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
-    elif name == "get_abstract":
-        result = get_abstract(arguments["doi"], api_key)
-        return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
-    elif name == "verify_doi":
-        result = verify_doi(arguments["doi"], api_key)
-        return [types.TextContent(type="text", text=json.dumps({"exists": result}))]
-    else:
-        raise ValueError(f"Unknown tool: {name}")
+    try:
+        api_key = load_api_key()
+        if name == "search_papers":
+            result = search_papers(arguments["query"], arguments.get("limit", 20), api_key)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+        elif name == "get_abstract":
+            result = get_abstract(arguments["doi"], api_key)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+        elif name == "verify_doi":
+            result = verify_doi(arguments["doi"], api_key)
+            return [types.TextContent(type="text", text=json.dumps({"exists": result}))]
+        else:
+            raise ValueError(f"Unknown tool: {name}")
+    except Exception as e:
+        return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
 
 async def main():
