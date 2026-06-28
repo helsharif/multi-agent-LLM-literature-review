@@ -71,7 +71,7 @@ def get_full_text(doi: str, api_key: str) -> dict:
     if resp.status_code == 404:
         raise RuntimeError(f"Full text not found for DOI: {doi}")
     if resp.status_code == 403:
-        raise RuntimeError(f"Full text access denied for DOI: {doi} — institutional subscription required")
+        raise RuntimeError(f"Full text access denied for DOI: {doi} — article may not be covered by your institutional subscription")
     if resp.status_code >= 500:
         raise RuntimeError(f"ScienceDirect server error: HTTP {resp.status_code}")
     if resp.status_code != 200:

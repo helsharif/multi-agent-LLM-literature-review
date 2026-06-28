@@ -111,7 +111,7 @@ The document structure is: Executive Summary → Background & Scope → Thematic
 | `scopus` | `mcp_servers/scopus_mcp/server.py` | `search_papers`, `get_abstract`, `verify_doi`, `get_full_text` |
 | `zotero` | `mcp_servers/zotero_mcp/server.py` | `create_collection`, `get_collection_key_by_name`, `get_collection_items`, `add_item`, `export_bibliography` |
 
-`get_full_text` uses the ScienceDirect API (same Elsevier API key as Scopus). Full text access requires institutional subscription; a 403 response means the paper is paywalled.
+`get_full_text` uses the ScienceDirect API (same Elsevier API key as Scopus). A 403 response means the specific article is not covered by your institutional subscription, even if your key generally includes full text access.
 
 ## Running tests
 

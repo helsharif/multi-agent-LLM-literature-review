@@ -129,7 +129,7 @@ def test_get_full_text_raises_on_not_found(mock_get):
 @patch("server.requests.get")
 def test_get_full_text_raises_on_access_denied(mock_get):
     mock_get.return_value = MagicMock(status_code=403)
-    with pytest.raises(RuntimeError, match="institutional subscription required"):
+    with pytest.raises(RuntimeError, match="not be covered by your institutional subscription"):
         get_full_text("10.1234/paywalled.001", api_key="testkey")
 
 @patch("server.requests.get")
