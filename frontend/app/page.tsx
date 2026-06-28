@@ -7,6 +7,9 @@ import ReviewOutput from "@/components/ReviewOutput";
 
 type AppState = "idle" | "running" | "done" | "error";
 
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000";
+
 export default function Home() {
   const [appState, setAppState] = useState<AppState>("idle");
   const [events, setEvents] = useState<ProgressEvent[]>([]);
@@ -24,11 +27,17 @@ export default function Home() {
     setFilename("");
     setErrorMsg("");
     setDownloadFormat(values.format);
+    setHeartbeat({ phase: "start", message: "Connecting to workflow stream..." });
 
     try {
-      const res = await fetch("/api/review", {
+      const res = await fetch(`${API_BASE_URL}/api/review`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Accept": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
         body: JSON.stringify({
           topic: values.topic,
           depth: values.depth,

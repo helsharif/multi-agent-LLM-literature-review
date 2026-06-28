@@ -17,7 +17,7 @@ app = FastAPI(title="Auto Literature Review API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -56,7 +56,11 @@ async def review(req: ReviewRequest) -> StreamingResponse:
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -95,6 +99,11 @@ async def download(filename: str, format: str = "md") -> Response:
                 status_code=500,
                 detail="python-docx not installed. Run: pip install python-docx",
             )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"DOCX export failed: {exc}",
+            ) from exc
         return Response(
             content=data,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -108,8 +117,13 @@ async def download(filename: str, format: str = "md") -> Response:
         except ImportError as exc:
             raise HTTPException(
                 status_code=500,
-                detail=f"PDF dependencies missing ({exc}). Run: pip install weasyprint markdown",
+                detail=f"PDF dependencies missing ({exc}). Run: pip install reportlab",
             )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"PDF export failed: {exc}",
+            ) from exc
         return Response(
             content=data,
             media_type="application/pdf",
