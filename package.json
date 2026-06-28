@@ -1,0 +1,11 @@
+{
+  "name": "lit-review-app",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n API,WEB -c \"cyan.bold,green.bold\" \".venv\\Scripts\\uvicorn api.main:app --reload\" \"cross-env NODE_NO_WARNINGS=1 npm --prefix frontend run dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "cross-env": "^7.0.3"
+  }
+}

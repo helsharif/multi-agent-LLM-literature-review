@@ -7,3 +7,6 @@ __pycache__/
 outputs/
 ~$*
 notes/
+
+node_modules/
+.next/

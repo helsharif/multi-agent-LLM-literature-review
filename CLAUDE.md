@@ -139,7 +139,7 @@ For each paper not already in the collection:
 1. Call add_item with all available metadata
 2. Track which were successfully added
 
-After all items added, call export_bibliography(collection_key, style="agu").
+After all items added, call export_bibliography(collection_key, style="american-geophysical-union").
 
 Return:
 {
@@ -177,7 +177,7 @@ Default: **AGU (American Geophysical Union)**
 Reference: https://www.agu.org/publications/authors/journals/grammar-style-guide
 
 Inline format: (Author et al., Year) for 3+ authors; (Author & Author, Year) for 2; (Author, Year) for 1.
-Bibliography: AGU style as exported by Zotero (`style="agu"` in `export_bibliography`).
+Bibliography: AGU style as exported by Zotero (`style="american-geophysical-union"` in `export_bibliography`).
 
 **Note on AGU style in Zotero:** The AGU CSL style must be installed in Zotero desktop. If `export_bibliography` returns an error mentioning an unknown style, open Zotero → Edit → Preferences → Cite → Styles, click "Get additional styles", search for "American Geophysical Union" and install it, then retry.
 

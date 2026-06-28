@@ -1,0 +1,142 @@
+"use client";
+
+import { useState, useCallback } from "react";
+import ReviewForm, { FormValues } from "@/components/ReviewForm";
+import ProgressPanel, { ProgressEvent } from "@/components/ProgressPanel";
+import ReviewOutput from "@/components/ReviewOutput";
+
+type AppState = "idle" | "running" | "done" | "error";
+
+export default function Home() {
+  const [appState, setAppState] = useState<AppState>("idle");
+  const [events, setEvents] = useState<ProgressEvent[]>([]);
+  const [heartbeat, setHeartbeat] = useState<{ phase: string; message: string } | null>(null);
+  const [markdown, setMarkdown] = useState("");
+  const [filename, setFilename] = useState("");
+  const [downloadFormat, setDownloadFormat] = useState("md");
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const handleSubmit = useCallback(async (values: FormValues) => {
+    setAppState("running");
+    setEvents([]);
+    setHeartbeat(null);
+    setMarkdown("");
+    setFilename("");
+    setErrorMsg("");
+    setDownloadFormat(values.format);
+
+    try {
+      const res = await fetch("/api/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: values.topic,
+          depth: values.depth,
+          format: values.format,
+          zotero_collection: values.zoteroCollection,
+        }),
+      });
+
+      if (!res.body) throw new Error("No response stream");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+
+            if (event.type === "status") {
+              setHeartbeat(null); // clear heartbeat on real progress
+              setEvents((prev) => [...prev, event as ProgressEvent]);
+            } else if (event.type === "heartbeat") {
+              setHeartbeat({ phase: event.phase, message: event.message });
+            } else if (event.type === "result") {
+              setHeartbeat(null);
+              setMarkdown(event.markdown);
+              setFilename(event.filename);
+              setAppState("done");
+            } else if (event.type === "error") {
+              setHeartbeat(null);
+              setErrorMsg(event.message);
+              setAppState("error");
+            }
+          } catch {
+            // malformed SSE line — ignore
+          }
+        }
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setAppState("error");
+    }
+  }, []);
+
+  const handleReset = useCallback(() => {
+    setAppState("idle");
+    setEvents([]);
+    setHeartbeat(null);
+    setMarkdown("");
+    setFilename("");
+    setErrorMsg("");
+  }, []);
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      {/* Header */}
+      <header className="bg-slate-800 text-white px-6 py-4 flex items-center gap-3">
+        <span className="text-2xl">📚</span>
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Auto Literature Review</h1>
+          <p className="text-slate-400 text-sm">
+            Scopus · Zotero · Claude AI
+          </p>
+        </div>
+      </header>
+
+      <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-8 flex flex-col gap-8">
+        {/* Form — always visible unless done */}
+        {appState !== "done" && (
+          <ReviewForm
+            onSubmit={handleSubmit}
+            isRunning={appState === "running"}
+          />
+        )}
+
+        {/* Progress panel */}
+        {(appState === "running" || appState === "error") && (
+          <ProgressPanel
+            events={events}
+            isRunning={appState === "running"}
+            heartbeat={heartbeat}
+            error={errorMsg}
+          />
+        )}
+
+        {/* Result */}
+        {appState === "done" && (
+          <ReviewOutput
+            markdown={markdown}
+            filename={filename}
+            defaultFormat={downloadFormat}
+            onReset={handleReset}
+          />
+        )}
+      </main>
+
+      <footer className="text-center text-slate-400 text-xs py-4">
+        Auto Literature Review · Local instance · Powered by Scopus, Zotero &amp; Anthropic
+      </footer>
+    </div>
+  );
+}

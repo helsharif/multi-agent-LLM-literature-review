@@ -16,7 +16,8 @@ Given a topic, depth, and output format, the workflow:
 ## Prerequisites
 
 - Python 3.12
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/overview) (`npm install -g @anthropic-ai/claude-code`)
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/overview) authenticated with your **Claude Pro or Max subscription** (`npm install -g @anthropic-ai/claude-code`, then `claude` to sign in)
+  — the web app uses the `claude --print` command to run AI steps; **no Anthropic API key required**
 - Zotero desktop (local install)
 - Elsevier developer account with API keys for Scopus and ScienceDirect
 
@@ -76,6 +77,39 @@ Open a terminal in this project directory and run `claude`. Once inside the CLI,
 
 ## Running a literature review
 
+### Option A — Web app (FastAPI + Next.js)
+
+The easiest way to run a review. Opens a browser UI where you fill in a form and watch the workflow run live.
+
+**Start both servers with one command** from the project root:
+
+```bash
+.venv\Scripts\activate
+npm run dev
+```
+
+This uses `concurrently` to run the FastAPI backend (port 8000) and the Next.js frontend (port 3000) side-by-side in the same terminal, with colour-coded output for each.
+
+**Open `http://localhost:3000` in your browser.**
+
+Fill in the form:
+- **Topic** — describe your research question in detail
+- **Search depth** — number of papers to retrieve (recommend 20–30)
+- **Download format** — Markdown, Word, or PDF
+- **Zotero collection** *(optional)* — leave blank to auto-generate a name
+
+Click **Generate Literature Review** and watch each step complete in real time. When done, the review renders inline and a download button appears.
+
+> **PDF and DOCX notes:**
+> - DOCX requires `pip install python-docx` (already in `requirements.txt`)
+> - PDF requires `pip install weasyprint markdown` plus system Cairo/Pango libraries.
+>   On Windows these are usually present if Visual C++ Redistributable is installed.
+>   If PDF fails, switch to Markdown or DOCX in the download format picker.
+
+---
+
+### Option B — Claude Code CLI (original workflow)
+
 Copy the prompt template from [`prompts/lit_review_runtime_prompt.md`](prompts/lit_review_runtime_prompt.md), fill in your parameters, and paste it into Claude Code:
 
 ```
@@ -93,6 +127,8 @@ To **resume an existing review** (add new papers to an existing Zotero collectio
 ```
 - zotero_collection: "Permafrost Carbon Feedbacks — 2026-06-27"
 ```
+
+> **Note:** The CLI workflow requires both MCP servers to be connected (`/mcp` shows `scopus` and `zotero` as connected). The web app does not use MCP — it calls the APIs directly.
 
 ## Output
 
@@ -126,15 +162,26 @@ pytest mcp_servers/zotero_mcp/tests/ -v
 ## Project structure
 
 ```
+├── package.json                       # Root-level: `npm run dev` starts both servers via concurrently
 ├── CLAUDE.md                          # Agent workflow instructions (read by Claude Code)
 ├── README.md                          # This file
-├── requirements.txt                   # Shared Python dependencies
+├── requirements.txt                   # Python dependencies (backend + MCP servers)
 ├── secrets/keys.txt                   # API keys (gitignored)
+├── api/
+│   ├── main.py                        # FastAPI app — SSE /api/review, /api/download
+│   ├── workflow.py                    # Python-orchestrated workflow; uses `claude --print` for AI steps
+│   └── convert.py                     # Markdown → DOCX (python-docx) / PDF (weasyprint)
+├── frontend/
+│   ├── app/page.tsx                   # Main page — form, SSE consumer, state machine
+│   ├── components/ReviewForm.tsx      # Topic, depth counter, format picker, Zotero input
+│   ├── components/ProgressPanel.tsx   # Live workflow progress display
+│   ├── components/ReviewOutput.tsx    # Rendered review + download button
+│   └── next.config.ts                 # Proxies /api/* → localhost:8000
 ├── mcp_servers/
 │   ├── scopus_mcp/server.py           # Scopus + ScienceDirect MCP server
 │   └── zotero_mcp/server.py           # Zotero MCP server
 ├── prompts/
-│   └── lit_review_runtime_prompt.md   # Copy-paste prompt template
+│   └── lit_review_runtime_prompt.md   # Copy-paste prompt template (CLI mode)
 ├── outputs/                           # Generated literature reviews (gitignored)
 ├── logs/
 │   └── verification_log.md            # Citation audit trail
