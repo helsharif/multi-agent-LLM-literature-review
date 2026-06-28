@@ -7,6 +7,7 @@ export interface FormValues {
   depth: number;
   format: string;
   zoteroCollection: string;
+  llmBackend: string;
 }
 
 interface Props {
@@ -20,16 +21,32 @@ const FORMAT_OPTIONS = [
   { value: "pdf",  label: "PDF (.pdf)" },
 ];
 
+const LLM_OPTIONS = [
+  { value: "claude", label: "Claude Code" },
+  { value: "gemini_flash", label: "Gemini 2.5 Flash (OpenRouter paid)" },
+  { value: "openrouter_free", label: "OpenRouter Free Router (auto)" },
+  { value: "qwen3_coder_free", label: "Qwen3 Coder 480B A35B (free)" },
+  { value: "nemotron_ultra_free", label: "NVIDIA Nemotron 3 Ultra (free)" },
+  { value: "nemotron_super_free", label: "NVIDIA Nemotron 3 Super (free)" },
+];
+
 export default function ReviewForm({ onSubmit, isRunning }: Props) {
   const [topic, setTopic] = useState("");
   const [depth, setDepth] = useState(20);
   const [format, setFormat] = useState("md");
   const [zoteroCollection, setZoteroCollection] = useState("");
+  const [llmBackend, setLlmBackend] = useState("claude");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!topic.trim()) return;
-    onSubmit({ topic: topic.trim(), depth, format, zoteroCollection: zoteroCollection.trim() });
+    onSubmit({
+      topic: topic.trim(),
+      depth,
+      format,
+      zoteroCollection: zoteroCollection.trim(),
+      llmBackend,
+    });
   };
 
   const adjustDepth = (delta: number) => {
@@ -73,6 +90,29 @@ export default function ReviewForm({ onSubmit, isRunning }: Props) {
             required
             disabled={isRunning}
           />
+        </div>
+
+        {/* LLM backend */}
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            LLM backend
+          </label>
+          <select
+            value={llmBackend}
+            onChange={(e) => setLlmBackend(e.target.value)}
+            disabled={isRunning}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-slate-400 bg-white"
+          >
+            {LLM_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-400 mt-1">
+            Claude uses the local CLI. OpenRouter Free auto-routes among free models; Gemini Flash is currently paid.
+          </p>
         </div>
 
         {/* Depth + Format row */}

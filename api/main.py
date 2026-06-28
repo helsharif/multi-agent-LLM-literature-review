@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from api.workflow import ReviewParams, run_review_workflow
+from api.workflow import LLM_BACKENDS, ReviewParams, run_review_workflow
 
 OUTPUTS_DIR = Path(__file__).parent.parent / "outputs"
 
@@ -28,15 +28,22 @@ class ReviewRequest(BaseModel):
     depth: int = Field(20, ge=5, le=100)
     format: str = Field("md", pattern="^(md|docx|pdf)$")
     zotero_collection: str = Field("")
+    llm_backend: str = Field("claude", pattern=f"^({'|'.join(LLM_BACKENDS.keys())})$")
 
 
 @app.post("/api/review")
 async def review(req: ReviewRequest) -> StreamingResponse:
+    print(
+        f"[api] /api/review topic_len={len(req.topic)} depth={req.depth} "
+        f"format={req.format} llm_backend={req.llm_backend}",
+        flush=True,
+    )
     params = ReviewParams(
         topic=req.topic,
         depth=req.depth,
         format=req.format,
         zotero_collection=req.zotero_collection.strip() or None,
+        llm_backend=req.llm_backend,
     )
 
     async def stream() -> AsyncIterator[str]:

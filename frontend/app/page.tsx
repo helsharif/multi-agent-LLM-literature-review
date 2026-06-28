@@ -34,14 +34,25 @@ export default function Home() {
           depth: values.depth,
           format: values.format,
           zotero_collection: values.zoteroCollection,
+          llm_backend: values.llmBackend,
         }),
       });
 
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`API request failed (${res.status}): ${text || res.statusText}`);
+      }
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!contentType.includes("text/event-stream")) {
+        const text = await res.text();
+        throw new Error(`Expected event stream from API, got ${contentType || "unknown content type"}: ${text}`);
+      }
       if (!res.body) throw new Error("No response stream");
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let sawTerminalEvent = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -62,11 +73,13 @@ export default function Home() {
             } else if (event.type === "heartbeat") {
               setHeartbeat({ phase: event.phase, message: event.message });
             } else if (event.type === "result") {
+              sawTerminalEvent = true;
               setHeartbeat(null);
               setMarkdown(event.markdown);
               setFilename(event.filename);
               setAppState("done");
             } else if (event.type === "error") {
+              sawTerminalEvent = true;
               setHeartbeat(null);
               setErrorMsg(event.message);
               setAppState("error");
@@ -75,6 +88,10 @@ export default function Home() {
             // malformed SSE line — ignore
           }
         }
+      }
+
+      if (!sawTerminalEvent) {
+        throw new Error("API stream ended before returning a result or error.");
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -99,7 +116,7 @@ export default function Home() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Auto Literature Review</h1>
           <p className="text-slate-400 text-sm">
-            Scopus · Zotero · Claude AI
+            Scopus · Zotero · Selectable LLM
           </p>
         </div>
       </header>
@@ -135,7 +152,7 @@ export default function Home() {
       </main>
 
       <footer className="text-center text-slate-400 text-xs py-4">
-        Auto Literature Review · Local instance · Powered by Scopus, Zotero &amp; Anthropic
+        Auto Literature Review · Local instance · Powered by Scopus, Zotero &amp; selectable LLMs
       </footer>
     </div>
   );

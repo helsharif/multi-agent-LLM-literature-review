@@ -15,6 +15,7 @@ interface Props {
 
 const PHASE_META: Record<string, { label: string; color: string }> = {
   start:          { label: "Starting",      color: "bg-slate-400"   },
+  llm_setup:      { label: "LLM",           color: "bg-cyan-500"    },
   zotero_setup:   { label: "Zotero",        color: "bg-violet-500"  },
   decompose:      { label: "Planning",      color: "bg-indigo-500"  },
   search:         { label: "Searching",     color: "bg-blue-500"    },
@@ -78,7 +79,7 @@ export default function ProgressPanel({ events, isRunning, heartbeat, error }: P
           </div>
         ))}
 
-        {/* Heartbeat — Claude is thinking */}
+        {/* Heartbeat */}
         {heartbeat && isRunning && (
           <div className="flex items-start gap-2 text-slate-700 font-medium">
             <span className={`mt-1.5 flex-shrink-0 w-2 h-2 rounded-full ${dotColor(heartbeat.phase)} animate-pulse`} />
