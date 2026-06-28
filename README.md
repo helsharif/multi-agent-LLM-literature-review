@@ -1,6 +1,6 @@
-# Automated Literature Review App with Scopus, Zotero, and Selectable LLM Backends
+# Multi-Agent LLM System for Automated Scientific Literature Review
 
-End-to-end research automation app that searches Scopus, synthesizes literature reviews with selectable LLM backends, verifies cited DOIs, saves verified papers to Zotero, and exports AGU-style review documents.
+A FastAPI and Next.js research automation app that uses selectable LLM backends, Scopus search, Zotero citation management, DOI verification, and AGU-style document export.
 
 ---
 
