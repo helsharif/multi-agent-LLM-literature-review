@@ -55,6 +55,12 @@ The app produces thematic synthesis, research gaps, open questions, and an AGU-s
 
 ![Generated research gaps and references](visuals/auto-lit-review-result-02.png)
 
+### Zotero Collection Output
+
+Verified papers are saved into the selected or auto-created Zotero collection, preserving citation metadata and DOI provenance for follow-up review.
+
+![Verified papers saved in Zotero](visuals/auto-lit-review-result-zotero.png)
+
 ---
 
 ## System Workflow
