@@ -16,7 +16,7 @@ Given a topic, depth, and output format, the workflow:
 ## Prerequisites
 
 - Python 3.12
-- [Claude Code](https://claude.ai/code)
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/overview) (`npm install -g @anthropic-ai/claude-code`)
 - Zotero desktop (local install)
 - Elsevier developer account with API keys for Scopus and ScienceDirect
 
@@ -66,11 +66,13 @@ In `.claude/settings.local.json`, add the `mcpServers` block with the absolute p
 
 **4. Install AGU citation style in Zotero**
 
-Zotero → Edit → Preferences → Cite → Styles → Get additional styles → search "American Geophysical Union" → Install
+Zotero → Edit → Settings → Cite → Styles → Get additional styles → search "American Geophysical Union" → Install
 
-**5. Restart Claude Code and verify**
+**5. Restart the Claude Code CLI and verify**
 
-Run `/mcp` — both `scopus` and `zotero` should show as connected.
+> **Important:** these are local stdio MCP servers — they only work with the **Claude Code CLI** (`claude` in a terminal), not the Claude Code web app (claude.ai/code). The web app uses cloud-hosted connectors and cannot launch local Python processes.
+
+Open a terminal in this project directory and run `claude`. Once inside the CLI, type `/mcp` — both `scopus` and `zotero` should show as connected.
 
 ## Running a literature review
 
@@ -96,19 +98,19 @@ To **resume an existing review** (add new papers to an existing Zotero collectio
 
 Each review produces:
 
-| File | Description |
-|---|---|
-| `outputs/<topic>_<date>.<ext>` | Final literature review document |
-| `logs/verification_log.md` | Audit trail: papers found, verified, replaced, unsupported claims |
-| Zotero collection | All verified papers with full metadata |
+| File                           | Description                                                       |
+| ------------------------------ | ----------------------------------------------------------------- |
+| `outputs/<topic>_<date>.<ext>` | Final literature review document                                  |
+| `logs/verification_log.md`     | Audit trail: papers found, verified, replaced, unsupported claims |
+| Zotero collection              | All verified papers with full metadata                            |
 
 The document structure is: Executive Summary → Background & Scope → Thematic Sections → Key Papers Table → Research Gaps → References.
 
 ## MCP servers
 
-| Server | File | Tools |
-|---|---|---|
-| `scopus` | `mcp_servers/scopus_mcp/server.py` | `search_papers`, `get_abstract`, `verify_doi`, `get_full_text` |
+| Server   | File                               | Tools                                                                                                        |
+| -------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `scopus` | `mcp_servers/scopus_mcp/server.py` | `search_papers`, `get_abstract`, `verify_doi`, `get_full_text`                                               |
 | `zotero` | `mcp_servers/zotero_mcp/server.py` | `create_collection`, `get_collection_key_by_name`, `get_collection_items`, `add_item`, `export_bibliography` |
 
 `get_full_text` uses the ScienceDirect API (same Elsevier API key as Scopus). A 403 response means the specific article is not covered by your institutional subscription, even if your key generally includes full text access.

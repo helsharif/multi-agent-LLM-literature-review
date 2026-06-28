@@ -202,8 +202,11 @@ All keys are in `secrets/keys.txt` (gitignored — never commit this file):
    pip install -r requirements.txt
    ```
 3. Populate `secrets/keys.txt` with all three keys
-4. Update `.claude/settings.local.json` with absolute paths to this project root
-5. Restart Claude Code — run `/mcp` to confirm both `scopus` and `zotero` servers show as connected
+4. Create `C:\Users\<you>\mcp_scopus.bat` and `C:\Users\<you>\mcp_zotero.bat` pointing to the `.venv` Python and the server scripts (see existing bat files for the template)
+5. Update `.mcp.json` at the project root if the bat file paths differ from the defaults
+6. Restart Claude Code — run `/mcp` to confirm both `scopus` and `zotero` servers show as connected
+
+**Note:** MCP server definitions belong in `.mcp.json` (project root), not in `.claude/settings.local.json`. The `enableAllProjectMcpServers: true` flag in `.claude/settings.local.json` auto-approves them on load.
 
 ## Keeping README.md Current
 

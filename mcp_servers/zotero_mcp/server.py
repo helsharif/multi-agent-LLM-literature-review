@@ -31,8 +31,9 @@ class ZoteroClient:
         self.zot = zot or pyzotero_lib.Zotero(creds["user_id"], "user", creds["api_key"])
 
     def create_collection(self, name: str) -> str:
+        # pyzotero returns {"success": {"0": key}, "unchanged": {}, "failed": {}}
         result = self.zot.create_collection([{"name": name, "parentCollection": False}])
-        return result[0]["key"]
+        return result["success"]["0"]
 
     def get_collection_key_by_name(self, name: str) -> str | None:
         collections = self.zot.collections()
@@ -77,12 +78,24 @@ class ZoteroClient:
         template["collections"] = [collection_key]
         if last_name:
             template["creators"] = [{"creatorType": "author", "lastName": last_name, "firstName": ""}]
+        # pyzotero returns {"success": {"0": key}, "unchanged": {}, "failed": {}}
         result = self.zot.create_items([template])
-        return result[0]["key"]
+        return result["success"]["0"]
 
     def export_bibliography(self, collection_key: str, style: str = "agu") -> str:
-        items = self.zot.collection_items(collection_key, format="bib", style=style)
-        return items if isinstance(items, str) else json.dumps(items, indent=2)
+        # pyzotero's collection_items() injects `limit=100` into every request by default,
+        # but the Zotero API rejects `limit` when format=bib (HTTP 400). Bypass pyzotero
+        # here and call the Zotero API directly without a limit parameter.
+        import requests as _requests
+        url = f"https://api.zotero.org/users/{self.zot.library_id}/collections/{collection_key}/items"
+        params = {"format": "bib", "style": style, "locale": "en-US"}
+        headers = {"Zotero-API-Key": self.zot.api_key}
+        resp = _requests.get(url, params=params, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Zotero bibliography export failed: HTTP {resp.status_code}\n{resp.text[:500]}"
+            )
+        return resp.text
 
 
 # Credentials are loaded once per process. Restart the server if API keys are rotated.

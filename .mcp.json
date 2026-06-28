@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "scopus": {
+      "command": "cmd",
+      "args": ["/c", "C:\\Users\\helsh\\mcp_scopus.bat"]
+    },
+    "zotero": {
+      "command": "cmd",
+      "args": ["/c", "C:\\Users\\helsh\\mcp_zotero.bat"]
+    }
+  }
+}

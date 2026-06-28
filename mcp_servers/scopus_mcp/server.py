@@ -47,11 +47,18 @@ def search_papers(query: str, limit: int, api_key: str) -> list[dict]:
 
 def get_abstract(doi: str, api_key: str) -> dict:
     url = f"{SCOPUS_BASE}/abstract/doi/{doi}"
-    resp = requests.get(url, params={"apiKey": api_key}, timeout=30)
+    # Elsevier defaults to XML; request JSON explicitly via both the Accept header
+    # and the httpAccept query param (the API honours whichever it sees first).
+    # view=META_ABS returns title + abstract without requiring a full institutional token.
+    params = {"apiKey": api_key, "view": "META_ABS", "httpAccept": "application/json"}
+    headers = {"Accept": "application/json"}
+    resp = requests.get(url, params=params, headers=headers, timeout=30)
     if resp.status_code == 404:
         raise RuntimeError(f"Abstract not found for DOI: {doi}")
+    if resp.status_code == 401:
+        raise RuntimeError(f"Scopus abstract fetch unauthorised for DOI: {doi} — check API key or insttoken")
     if resp.status_code != 200:
-        raise RuntimeError(f"Scopus abstract fetch failed: HTTP {resp.status_code}")
+        raise RuntimeError(f"Scopus abstract fetch failed: HTTP {resp.status_code} — {resp.text[:200]}")
     core = (
         resp.json()
         .get("abstracts-retrieval-response", {})
