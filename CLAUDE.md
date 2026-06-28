@@ -32,8 +32,10 @@ When the user submits a literature review request, act as the **Orchestrator** a
 - Parse the runtime prompt: extract `topic`, `depth`, `format`, and `zotero_collection` (optional)
 - Decompose the topic into 3–5 subtopics for parallel search
 - Resolve Zotero collection:
-  - If `zotero_collection` provided: call `get_collection_key_by_name`, retrieve existing papers with `get_collection_items`
-  - If not provided: call `create_collection` with name `<topic> — <YYYY-MM-DD>`
+  - If `zotero_collection` provided: call `get_collection_key_by_name`
+    - If the collection exists: retrieve existing papers with `get_collection_items`
+    - If `get_collection_key_by_name` returns null: treat the provided name as a new collection and call `create_collection` with that exact name (do NOT fall back to the auto-generated name)
+  - If not provided: call `create_collection` with name `<YYYY-MM> <topic>`
 - Coordinate all agents below in sequence
 - Pass results between agents explicitly (don't assume agents share state)
 
