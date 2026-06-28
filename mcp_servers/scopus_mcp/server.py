@@ -64,6 +64,21 @@ def get_abstract(doi: str, api_key: str) -> dict:
     }
 
 
+def get_full_text(doi: str, api_key: str) -> dict:
+    url = f"https://api.elsevier.com/content/article/doi/{doi}"
+    headers = {"Accept": "text/plain", "X-ELS-APIKey": api_key}
+    resp = requests.get(url, headers=headers, timeout=60)
+    if resp.status_code == 404:
+        raise RuntimeError(f"Full text not found for DOI: {doi}")
+    if resp.status_code == 403:
+        raise RuntimeError(f"Full text access denied for DOI: {doi} — institutional subscription required")
+    if resp.status_code >= 500:
+        raise RuntimeError(f"ScienceDirect server error: HTTP {resp.status_code}")
+    if resp.status_code != 200:
+        raise RuntimeError(f"ScienceDirect full text fetch failed: HTTP {resp.status_code}")
+    return {"doi": doi, "full_text": resp.text}
+
+
 def verify_doi(doi: str, api_key: str) -> bool:
     url = f"{SCOPUS_BASE}/search/scopus"
     params = {"query": f"DOI({doi})", "count": 1, "apiKey": api_key}
@@ -113,6 +128,17 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["doi"],
             },
         ),
+        types.Tool(
+            name="get_full_text",
+            description="Fetch the full text of an article via ScienceDirect (same API key as Scopus). Returns plain text. Raises if access is denied (institutional subscription required) or article not found.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "doi": {"type": "string", "description": "Paper DOI"},
+                },
+                "required": ["doi"],
+            },
+        ),
     ]
 
 
@@ -129,6 +155,9 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         elif name == "verify_doi":
             result = verify_doi(arguments["doi"], api_key)
             return [types.TextContent(type="text", text=json.dumps({"exists": result}))]
+        elif name == "get_full_text":
+            result = get_full_text(arguments["doi"], api_key)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
         else:
             raise ValueError(f"Unknown tool: {name}")
     except Exception as e:

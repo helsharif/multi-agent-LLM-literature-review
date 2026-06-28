@@ -204,3 +204,7 @@ All keys are in `secrets/keys.txt` (gitignored — never commit this file):
 3. Populate `secrets/keys.txt` with all three keys
 4. Update `.claude/settings.local.json` with absolute paths to this project root
 5. Restart Claude Code — run `/mcp` to confirm both `scopus` and `zotero` servers show as connected
+
+## Keeping README.md Current
+
+Update `README.md` whenever significant changes are made to this project — new MCP tools, new agents, new runtime parameters, changed setup steps, or new output formats. The README is the entry point for anyone setting up this project fresh.

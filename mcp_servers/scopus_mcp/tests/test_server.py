@@ -1,7 +1,7 @@
 import pytest
 import json
 from unittest.mock import patch, MagicMock
-from server import load_api_key, search_papers, get_abstract, verify_doi
+from server import load_api_key, search_papers, get_abstract, verify_doi, get_full_text
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -108,3 +108,32 @@ def test_verify_doi_raises_on_server_error(mock_get):
     mock_get.return_value = MagicMock(status_code=500)
     with pytest.raises(RuntimeError, match="Scopus server error"):
         verify_doi("10.1234/test.001", api_key="testkey")
+
+@patch("server.requests.get")
+def test_get_full_text_returns_text(mock_get):
+    mock_get.return_value = MagicMock(status_code=200, text="Full article body text.")
+    result = get_full_text("10.1234/test.001", api_key="testkey")
+    assert result["doi"] == "10.1234/test.001"
+    assert result["full_text"] == "Full article body text."
+    mock_get.assert_called_once()
+    call_kwargs = mock_get.call_args
+    assert call_kwargs.kwargs["headers"]["X-ELS-APIKey"] == "testkey"
+    assert call_kwargs.kwargs["headers"]["Accept"] == "text/plain"
+
+@patch("server.requests.get")
+def test_get_full_text_raises_on_not_found(mock_get):
+    mock_get.return_value = MagicMock(status_code=404)
+    with pytest.raises(RuntimeError, match="Full text not found"):
+        get_full_text("10.9999/bad.doi", api_key="testkey")
+
+@patch("server.requests.get")
+def test_get_full_text_raises_on_access_denied(mock_get):
+    mock_get.return_value = MagicMock(status_code=403)
+    with pytest.raises(RuntimeError, match="institutional subscription required"):
+        get_full_text("10.1234/paywalled.001", api_key="testkey")
+
+@patch("server.requests.get")
+def test_get_full_text_raises_on_server_error(mock_get):
+    mock_get.return_value = MagicMock(status_code=500)
+    with pytest.raises(RuntimeError, match="ScienceDirect server error"):
+        get_full_text("10.1234/test.001", api_key="testkey")
