@@ -29,6 +29,7 @@ class ReviewRequest(BaseModel):
     format: str = Field("md", pattern="^(md|docx|pdf)$")
     zotero_collection: str = Field("")
     llm_backend: str = Field("claude", pattern=f"^({'|'.join(LLM_BACKENDS.keys())})$")
+    source_categories: list[str] = Field(default_factory=lambda: ["scholarly", "official"])
 
 
 @app.post("/api/review")
@@ -44,6 +45,7 @@ async def review(req: ReviewRequest) -> StreamingResponse:
         format=req.format,
         zotero_collection=req.zotero_collection.strip() or None,
         llm_backend=req.llm_backend,
+        source_categories=req.source_categories,
     )
 
     async def stream() -> AsyncIterator[str]:

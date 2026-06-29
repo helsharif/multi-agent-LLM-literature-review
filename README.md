@@ -2,7 +2,7 @@
 
 ![Multi-Agent LLM System for Automated Scientific Literature Review](visuals/auto-lit-review-summary-image-optimized.png)
 
-A FastAPI and Next.js research automation app that uses selectable LLM backends, Scopus search, Zotero citation management, DOI verification, and AGU-style document export.
+A FastAPI and Next.js research automation app that uses selectable LLM backends, multi-source scholarly and official-document retrieval, evidence-tier governance, Zotero citation management, DOI/URL verification, and AGU-style document export.
 
 ---
 
@@ -11,10 +11,10 @@ A FastAPI and Next.js research automation app that uses selectable LLM backends,
 - **Task:** Automated scientific literature review generation
 - **Domain:** Hydrology, climate, infrastructure, and environmental literature review workflows
 - **Objective:** Reduce manual literature-review overhead while preserving citation traceability
-- **Core workflow:** Scopus search -> LLM synthesis -> DOI verification -> Zotero save -> AGU bibliography export
+- **Core workflow:** Evidence-aware query planning -> Scopus/OpenAlex/Semantic Scholar/Crossref/trusted official retrieval -> direct/adjacent/transfer classification -> LLM synthesis -> DOI/URL verification -> Zotero save -> AGU bibliography export
 - **LLM options:** Claude Code, OpenRouter Free Router, Gemini Flash, Qwen3 Coder, NVIDIA Nemotron Ultra, NVIDIA Nemotron Super
 - **Outputs:** Markdown, Word, and PDF review documents
-- **Provenance:** Final metadata records selected LLM backend, DOI verification count, Zotero collection, and assigned OpenRouter model when using `openrouter/free`
+- **Provenance:** Final metadata records selected LLM backend, evidence-tier counts, DOI verification count, Zotero collection, and assigned OpenRouter model when using `openrouter/free`
 
 This project demonstrates practical GenAI application engineering: API integration, model fallback design, citation verification, document export, and a usable frontend for research workflows.
 
@@ -41,7 +41,7 @@ The goal of this project is to build a local research assistant that combines LL
 
 ### Review Setup Interface
 
-The user enters a research topic, selects an LLM backend, chooses search depth and output format, and optionally provides a Zotero collection name.
+The user enters a research topic, selects an LLM backend, chooses search depth, selects source categories, chooses output format, and optionally provides a Zotero collection name.
 
 ![Auto Literature Review setup screen](visuals/auto-lit-review-gui-example.png)
 
@@ -80,22 +80,35 @@ User topic
 LLM-generated concise Zotero title
    |
    v
-LLM topic decomposition into Scopus subtopics
+LLM evidence-aware query plan
    |
    v
-Scopus search + DOI deduplication
+Multi-source retrieval
+   |-- Scopus
+   |-- OpenAlex
+   |-- Semantic Scholar
+   |-- Crossref
+   |-- SerpAPI trusted official domains
+   |-- Data.gov / OSTI
    |
    v
-LLM literature review synthesis
+Deduplicate and classify sources
+   |-- direct evidence
+   |-- adjacent evidence
+   |-- transfer-only evidence
+   |-- Tier 1-4 evidence ranking
+   |
+   v
+LLM literature review synthesis with governance rules
    |
    v
 Parse CITED_DOIS marker
    |
    v
-Scopus DOI existence verification
+Scopus/Crossref DOI verification + trusted official URL acceptance
    |
    v
-Save verified papers to Zotero
+Save verified papers, reports, and official documents to Zotero
    |
    v
 Export AGU bibliography
@@ -131,7 +144,23 @@ Example metadata:
 
 ### Citation Grounding
 
-The synthesis prompt requires a final `CITED_DOIS` marker. The backend parses this marker, verifies DOI existence through Scopus, and uses the verified paper set for Zotero saving and bibliography export.
+The synthesis prompt requires a final `CITED_DOIS` marker. The backend parses this marker, verifies DOI existence through Scopus with Crossref fallback, and uses the verified paper set for Zotero saving and bibliography export.
+
+### Evidence Governance
+
+The retrieval workflow assigns every candidate source a `source_type`, `evidence_tier`, `relevance_bucket`, and `citation_role` before synthesis.
+
+| Label | Meaning | Role |
+| --- | --- | --- |
+| Direct evidence | Source directly studies the target topic or its applied implementation | Main findings |
+| Adjacent evidence | Source supports background, methods, policy context, or research gaps | Secondary context only |
+| Transfer-only evidence | Source is methodologically analogous but not about the target domain | Excluded from main synthesis |
+| Tier 1 | Peer-reviewed article, systematic review, or major conference proceeding | Core scientific evidence |
+| Tier 2 | Government scientific report, regulator guidance, state/federal technical report, or official utility evaluation | Core applied/policy evidence |
+| Tier 3 | University, professional-society, or consultant technical report | Supporting applied evidence |
+| Tier 4 | Trusted journalism or web context | Context only |
+
+The synthesis prompt enforces a minimum direct-evidence rule. If direct evidence is sparse, the final review must say so explicitly and cannot pad the main findings with transferable examples from unrelated domains.
 
 ### Zotero Integration
 
@@ -140,7 +169,7 @@ The app can:
 - create a new Zotero collection
 - resume an existing collection by name
 - skip duplicate DOIs already in the collection
-- add verified papers to Zotero
+- add verified papers, reports, trusted official web documents, and DOI-free government/utility sources to Zotero
 - export a bibliography in American Geophysical Union style
 
 ### Operational UX
@@ -150,6 +179,7 @@ The local dev workflow includes:
 - automatic browser opening after `npm run dev`
 - terminal instructions for shutdown
 - live frontend progress updates
+- simple source-category controls for scholarly literature, official reports/data, and trusted web context
 - clearer API errors for stale servers, model limits, and non-stream responses
 - output filenames with brief topic, date, and backend code
 
@@ -166,7 +196,8 @@ sebou-basin-climate-and-water-risk_2026-06-28_orfree.md
 - **Frontend:** Next.js, React, Tailwind CSS
 - **Backend:** FastAPI, Python async workflow orchestration
 - **LLM backends:** Claude Code CLI, OpenRouter Chat Completions API
-- **Scholarly search:** Scopus API
+- **Scholarly search:** Scopus, OpenAlex, Semantic Scholar, Crossref
+- **Official and gray-literature discovery:** SerpAPI constrained to trusted domains, Data.gov, OSTI
 - **Citation manager:** Zotero API
 - **Documents:** Markdown, python-docx, WeasyPrint
 - **Dev tooling:** npm, concurrently, pytest
@@ -180,6 +211,7 @@ sebou-basin-climate-and-water-risk_2026-06-28_orfree.md
 ├── api/
 │   ├── main.py                        # FastAPI app, SSE /api/review, /api/download
 │   ├── workflow.py                    # Review workflow and selectable LLM backends
+│   ├── retrieval.py                   # Multi-source retrieval and evidence governance
 │   └── convert.py                     # Markdown to DOCX/PDF conversion
 ├── frontend/
 │   ├── app/page.tsx                   # Main UI and SSE consumer
@@ -231,9 +263,12 @@ SCOPUS_API_KEY=<your Elsevier API key>
 ZOTERO_API_KEY=<your Zotero API key>
 ZOTERO_USER_ID=<your Zotero numeric user ID>
 OPENROUTER_API_KEY=<your OpenRouter API key, optional unless using OpenRouter backends>
+SERPAPI_API_KEY=<your SerpAPI key, optional for trusted web/official document search>
+SEMANTIC_SCHOLAR_API_KEY=<your Semantic Scholar key, optional but improves rate limits>
+OPENALEX_EMAIL=<your email, optional polite-pool identifier>
 ```
 
-`secrets/keys.txt` is excluded from Git.
+`secrets/keys.txt` is excluded from Git. OpenAlex, Crossref, Data.gov, and OSTI can be used without paid keys; SerpAPI is only used when `SERPAPI_API_KEY` is present.
 
 ### 4. Install AGU citation style in Zotero
 
@@ -288,10 +323,20 @@ The final review includes:
 - run metadata
 - executive summary
 - background and scope
+- evidence-base governance summary
 - thematic synthesis
-- key papers table
+- key sources table with source type, evidence tier, and relevance labels
 - research gaps and open questions
+- excluded transfer-only source notes when applicable
 - AGU bibliography
+
+The setup form includes three source-category options:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| Scholarly literature | On | Searches Scopus, OpenAlex, Semantic Scholar, and Crossref |
+| Official reports & data | On | Searches agency, utility, government catalog, Data.gov, and OSTI-style sources |
+| Trusted web context | Off | Adds curated web search for context and hard-to-index gray literature |
 
 ---
 
@@ -303,7 +348,8 @@ This project is designed around reproducible research automation:
 - generated outputs are excluded from Git
 - Zotero collection metadata is recorded in the final report
 - LLM backend and OpenRouter-assigned model are recorded in metadata
-- DOI verification is separated from prose generation
+- DOI/URL verification is separated from prose generation
+- direct, adjacent, and transfer-only evidence are classified before synthesis
 - frontend, backend, and conversion logic are modularized
 
 Recommended checks:
@@ -312,7 +358,7 @@ Recommended checks:
 .venv\Scripts\activate
 pytest mcp_servers/scopus_mcp/tests/ -v
 pytest mcp_servers/zotero_mcp/tests/ -v
-python -m py_compile api\workflow.py api\main.py
+python -m py_compile api\workflow.py api\main.py api\retrieval.py
 npm --prefix frontend run build
 ```
 
@@ -349,6 +395,8 @@ This project highlights:
 - applied GenAI product engineering
 - scientific-literature automation
 - API integration with Scopus and Zotero
+- multi-source retrieval with OpenAlex, Semantic Scholar, Crossref, SerpAPI, Data.gov, and OSTI
+- evidence-tier governance for peer-reviewed and gray literature
 - citation-grounded LLM workflow design
 - fallback model routing and LLM provenance tracking
 - FastAPI and Next.js full-stack development
@@ -360,7 +408,7 @@ It builds on earlier multi-agent literature-review prototypes and productizes th
 
 ## Disclaimer
 
-This project is for research and portfolio demonstration purposes. Generated reviews should be manually checked before use in academic, regulatory, engineering, or policy decisions. Scopus, Zotero, Claude, OpenRouter, Gemini, Qwen, and NVIDIA model availability and terms may change over time.
+This project is for research and portfolio demonstration purposes. Generated reviews should be manually checked before use in academic, regulatory, engineering, or policy decisions. Scopus, OpenAlex, Semantic Scholar, Crossref, SerpAPI, Data.gov, OSTI, Zotero, Claude, OpenRouter, Gemini, Qwen, and NVIDIA model availability and terms may change over time.
 
 ---
 

@@ -8,6 +8,7 @@ export interface FormValues {
   format: string;
   zoteroCollection: string;
   llmBackend: string;
+  sourceCategories: string[];
 }
 
 interface Props {
@@ -30,12 +31,31 @@ const LLM_OPTIONS = [
   { value: "nemotron_super_free", label: "NVIDIA Nemotron 3 Super (free)" },
 ];
 
+const SOURCE_OPTIONS = [
+  {
+    value: "scholarly",
+    label: "Scholarly literature",
+    description: "Scopus, OpenAlex, Semantic Scholar, and Crossref.",
+  },
+  {
+    value: "official",
+    label: "Official reports & data",
+    description: "Government, agency, utility, Data.gov, and OSTI sources.",
+  },
+  {
+    value: "trusted_web",
+    label: "Trusted web context",
+    description: "Curated web results for context and hard-to-index gray literature.",
+  },
+];
+
 export default function ReviewForm({ onSubmit, isRunning }: Props) {
   const [topic, setTopic] = useState("");
   const [depth, setDepth] = useState(20);
   const [format, setFormat] = useState("md");
   const [zoteroCollection, setZoteroCollection] = useState("");
   const [llmBackend, setLlmBackend] = useState("claude");
+  const [sourceCategories, setSourceCategories] = useState(["scholarly", "official"]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,12 +66,24 @@ export default function ReviewForm({ onSubmit, isRunning }: Props) {
       format,
       zoteroCollection: zoteroCollection.trim(),
       llmBackend,
+      sourceCategories,
     });
   };
 
   const adjustDepth = (delta: number) => {
     setDepth((d) => Math.min(100, Math.max(5, d + delta)));
   };
+
+  const toggleSourceCategory = (value: string) => {
+    setSourceCategories((current) => {
+      if (current.includes(value)) {
+        return current.filter((item) => item !== value);
+      }
+      return [...current, value];
+    });
+  };
+
+  const canSubmit = Boolean(topic.trim()) && sourceCategories.length > 0;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -174,6 +206,40 @@ export default function ReviewForm({ onSubmit, isRunning }: Props) {
           </div>
         </div>
 
+        {/* Source categories */}
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-2">
+            Source categories
+          </label>
+          <div className="grid gap-2">
+            {SOURCE_OPTIONS.map((opt) => (
+              <label
+                key={opt.value}
+                className={`flex items-start gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                  sourceCategories.includes(opt.value)
+                    ? "border-slate-400 bg-slate-50"
+                    : "border-slate-200 bg-white"
+                } ${isRunning ? "opacity-60" : "cursor-pointer hover:bg-slate-50"}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={sourceCategories.includes(opt.value)}
+                  onChange={() => toggleSourceCategory(opt.value)}
+                  disabled={isRunning}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-800 focus:ring-slate-400"
+                />
+                <span>
+                  <span className="block font-medium text-slate-700">{opt.label}</span>
+                  <span className="block text-xs text-slate-400">{opt.description}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          {sourceCategories.length === 0 && (
+            <p className="text-xs text-red-500 mt-1">Select at least one source category.</p>
+          )}
+        </div>
+
         {/* Zotero collection */}
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -198,7 +264,7 @@ export default function ReviewForm({ onSubmit, isRunning }: Props) {
         {/* Submit */}
         <button
           type="submit"
-          disabled={isRunning || !topic.trim()}
+          disabled={isRunning || !canSubmit}
           className="w-full rounded-xl bg-slate-800 text-white py-3 px-4 font-medium
                      hover:bg-slate-700 active:bg-slate-900 transition-colors
                      disabled:opacity-50 disabled:cursor-not-allowed

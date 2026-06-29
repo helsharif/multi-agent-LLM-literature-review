@@ -19,6 +19,7 @@ const PHASE_META: Record<string, { label: string; color: string }> = {
   zotero_setup:   { label: "Zotero",        color: "bg-violet-500"  },
   decompose:      { label: "Planning",      color: "bg-indigo-500"  },
   search:         { label: "Searching",     color: "bg-blue-500"    },
+  classify:       { label: "Classifying",   color: "bg-fuchsia-500" },
   synthesize:     { label: "Synthesizing",  color: "bg-amber-500"   },
   verify:         { label: "Verifying",     color: "bg-orange-500"  },
   zotero_save:    { label: "Saving",        color: "bg-emerald-500" },

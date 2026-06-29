@@ -31,6 +31,20 @@ from mcp_servers.scopus_mcp.server import (
     load_api_key as _load_scopus_key,
 )
 from mcp_servers.zotero_mcp.server import ZoteroClient, load_credentials as _load_zotero_creds
+from api.retrieval import (
+    classify_record,
+    dedupe_records,
+    normalize_doi,
+    run_source_safely,
+    search_crossref,
+    search_data_gov,
+    search_openalex,
+    search_osti,
+    search_semantic_scholar,
+    search_serpapi_trusted,
+    trusted_url_is_verifiable,
+    verify_crossref_doi,
+)
 
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
@@ -43,6 +57,7 @@ class ReviewParams:
     format: str
     zotero_collection: str | None
     llm_backend: str = "claude"
+    source_categories: list[str] | None = None
 
 
 @dataclass
@@ -503,6 +518,10 @@ def _assemble(
     zotero_name: str,
     collection_key: str,
     llm_backend_label: str,
+    n_direct: int = 0,
+    n_adjacent: int = 0,
+    n_transfer: int = 0,
+    n_url_verified: int = 0,
 ) -> str:
     metadata = (
         f"- **Date:** {today}\n"
@@ -510,6 +529,10 @@ def _assemble(
         f"- **LLM backend:** {llm_backend_label}\n"
         f"- **Papers reviewed:** {n_papers}\n"
         f"- **Papers verified (DOI existence):** {n_verified} / {n_papers}\n"
+        f"- **Trusted official no-DOI sources accepted:** {n_url_verified}\n"
+        f"- **Direct evidence sources:** {n_direct}\n"
+        f"- **Adjacent/background sources:** {n_adjacent}\n"
+        f"- **Transfer-only sources excluded:** {n_transfer}\n"
         f"- **Papers replaced:** {n_replaced}\n"
         f"- **Unsupported claims:** {n_unsupported}\n"
         f"- **Zotero collection:** {zotero_name} (key: {collection_key})"
@@ -548,6 +571,88 @@ def _extract_cited_dois(raw_synth: str) -> tuple[str, list[str]]:
     except Exception:
         cited_dois = []
     return draft, cited_dois
+
+
+def _fallback_query_plan(topic: str) -> dict:
+    return {
+        "direct_queries": [
+            topic,
+            f'("{topic}" OR "lead service line") AND ("machine learning" OR predictive OR inventory OR replacement)',
+            '"lead service line" AND ("machine learning" OR "predictive model" OR inventory OR prioritization)',
+            '"lead service line" AND (Flint OR Pittsburgh OR Denver OR "New Jersey")',
+        ],
+        "adjacent_queries": [
+            '"positive unlabeled learning" AND (infrastructure OR utility OR pipe OR environmental)',
+            '"spatial cross validation" AND ("machine learning" OR "risk prediction")',
+            'equity AND ("water infrastructure" OR "drinking water" OR "lead exposure")',
+        ],
+        "official_queries": [
+            '"lead service line" "predictive modeling"',
+            '"lead service line" inventory prioritization',
+            '"lead service line" replacement verification utility report',
+        ],
+        "seed_titles": [
+            "Active Remediation: The Search for Lead Pipes in Flint, Michigan",
+            "A Data Science Approach to Understanding Residential Water Contamination in Flint",
+            "Lead Service Line Identification: A Review of Strategies and Approaches",
+            "Predicting Lead Water Service Lines in the Pittsburgh Water and Sewer Authority Service Area",
+        ],
+    }
+
+
+def _coerce_query_plan(raw: str, topic: str) -> dict:
+    try:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            raise ValueError("No JSON object found")
+        parsed = json.loads(m.group())
+    except Exception:
+        return _fallback_query_plan(topic)
+
+    fallback = _fallback_query_plan(topic)
+    plan = {}
+    for key in ("direct_queries", "adjacent_queries", "official_queries", "seed_titles"):
+        values = parsed.get(key)
+        if not isinstance(values, list):
+            values = fallback[key]
+        cleaned = [str(value).strip() for value in values if str(value).strip()]
+        plan[key] = cleaned[:6] or fallback[key]
+    return plan
+
+
+def _enrich_scopus_record(record: dict, query: str) -> dict:
+    out = dict(record)
+    out.setdefault("source", "Scopus")
+    out.setdefault("source_type", "peer-reviewed article")
+    out.setdefault("evidence_tier", "Tier 1")
+    out.setdefault("retrieval_query", query)
+    out["doi"] = normalize_doi(out.get("doi"))
+    return out
+
+
+def _evidence_counts(records: list[dict]) -> dict[str, int]:
+    return {
+        "direct": sum(1 for r in records if r.get("relevance_bucket") == "direct"),
+        "adjacent": sum(1 for r in records if r.get("relevance_bucket") == "adjacent"),
+        "transfer_only": sum(1 for r in records if r.get("relevance_bucket") == "transfer_only"),
+    }
+
+
+def _source_summary(records: list[dict]) -> str:
+    counts: dict[str, int] = {}
+    for record in records:
+        source = record.get("source", "Unknown")
+        bucket = record.get("relevance_bucket", "unclassified")
+        key = f"{source} / {bucket}"
+        counts[key] = counts.get(key, 0) + 1
+    return ", ".join(f"{key}: {value}" for key, value in sorted(counts.items()))
+
+
+def _selected_source_categories(params: ReviewParams) -> set[str]:
+    allowed = {"scholarly", "official", "trusted_web"}
+    selected = {str(value).strip() for value in (params.source_categories or [])}
+    selected = selected & allowed
+    return selected or {"scholarly", "official"}
 
 
 # ---------------------------------------------------------------------------
@@ -614,15 +719,25 @@ async def run_review_workflow(params: ReviewParams) -> AsyncGenerator[dict, None
 
     existing_dois = {p["doi"].lower() for p in existing_papers if p.get("doi")}
 
-    # ── Step 2: Topic decomposition ─────────────────────────────────────────
-    decompose_prompt = (
-        f'Break this research topic into 3-5 specific Scopus search subtopics:\n\n'
-        f'"{params.topic}"\n\n'
-        f'Target total papers: {params.depth}\n\n'
-        'Return ONLY a JSON array of strings, nothing else. Example:\n'
-        '["subtopic one", "subtopic two", "subtopic three"]'
-    )
-    yield st("decompose", f"{llm_label} running — planning search subtopics...")
+    # ── Step 2: Evidence-aware query planning ───────────────────────────────
+    decompose_prompt = f"""Create a retrieval query plan for a rigorous literature review.
+
+Topic:
+"{params.topic}"
+
+Return ONLY a JSON object with these keys:
+- direct_queries: 3-5 scholarly search queries for sources directly studying the topic
+- adjacent_queries: 2-4 scholarly queries for background or methods, clearly secondary
+- official_queries: 3-5 official/government/utility/professional-society web queries
+- seed_titles: 2-5 known direct seed papers/reports when applicable
+
+Rules:
+- Prefer exact domain language from the topic over generic method transfer.
+- For lead service line topics, include "lead service line", "predictive model", "inventory",
+  "Flint", "Pittsburgh", "Denver", and "New Jersey" where useful.
+- Do not include unrelated transfer-only domains unless the topic explicitly asks for them.
+"""
+    yield st("decompose", f"{llm_label} running — planning direct, adjacent, and official searches...")
     _task = asyncio.ensure_future(asyncio.to_thread(_run_llm_sync, decompose_prompt, params.llm_backend, 120, 1000))
     _beats = 0
     while not _task.done():
@@ -633,71 +748,178 @@ async def run_review_workflow(params: ReviewParams) -> AsyncGenerator[dict, None
 
     try:
         raw = _task.result()
-        m = re.search(r"\[.*?\]", raw, re.DOTALL)
-        if not m:
-            raise ValueError(f"No JSON array in response: {raw[:200]}")
-        subtopics: list[str] = json.loads(m.group())
+        query_plan = _coerce_query_plan(raw, params.topic)
     except Exception as exc:
         print(f"[workflow] decompose error: {repr(exc)}", flush=True)
-        yield {"type": "error", "message": f"Topic decomposition failed: {exc}"}
-        return
+        query_plan = _fallback_query_plan(params.topic)
 
-    yield st("decompose", f"Done — {len(subtopics)} subtopics: {subtopics}")
+    direct_queries = query_plan["direct_queries"]
+    adjacent_queries = query_plan["adjacent_queries"]
+    official_queries = query_plan["official_queries"]
+    seed_titles = query_plan["seed_titles"]
+    selected_sources = _selected_source_categories(params)
+    selected_labels = {
+        "scholarly": "scholarly literature",
+        "official": "official reports & data",
+        "trusted_web": "trusted web context",
+    }
+    yield st(
+        "decompose",
+        "Done — "
+        f"{len(direct_queries)} direct, {len(adjacent_queries)} adjacent, "
+        f"{len(official_queries)} official, {len(seed_titles)} seed queries",
+    )
+    yield st(
+        "decompose",
+        "Source categories selected: "
+        + ", ".join(selected_labels[key] for key in ("scholarly", "official", "trusted_web") if key in selected_sources),
+    )
 
-    # ── Step 3: Scopus search ───────────────────────────────────────────────
-    papers_per_subtopic = max(1, params.depth // len(subtopics))
-    all_papers: list[dict] = list(existing_papers)
-    seen_dois: set[str] = set(existing_dois)
+    # ── Step 3: Multi-source retrieval ─────────────────────────────────────
+    scholarly_queries = direct_queries + seed_titles
+    adjacent_limit = max(1, min(4, params.depth // 8))
+    scholarly_limit = max(2, params.depth // max(1, len(scholarly_queries) * 3))
+    official_limit = max(2, min(6, params.depth // max(1, len(official_queries))))
+    all_papers: list[dict] = [
+        classify_record(
+            {
+                **p,
+                "source": "Zotero existing",
+                "source_type": "existing Zotero item",
+                "evidence_tier": "Tier 1" if p.get("doi") else "Tier 3",
+                "retrieval_query": "existing Zotero collection",
+            },
+            params.topic,
+        )
+        for p in existing_papers
+    ]
 
-    for i, subtopic in enumerate(subtopics, 1):
-        yield st("search", f'search_papers ({i}/{len(subtopics)}): "{subtopic[:70]}"')
-        try:
-            results = await asyncio.to_thread(
-                _search_papers, subtopic, papers_per_subtopic, scopus_key
-            )
-            new = [p for p in results if p.get("doi") and p["doi"].lower() not in seen_dois]
-            for p in new:
-                seen_dois.add(p["doi"].lower())
-            all_papers.extend(new)
-            yield st("search", f"  → {len(results)} results, {len(new)} new unique papers")
-            # Show first few titles so progress feels tangible
-            for p in new[:3]:
-                author = p.get("first_author", "Unknown").split(",")[0]
-                year   = p.get("year", "?")
-                title  = p.get("title", "")[:65]
-                yield st("search", f"    • {author} ({year}) — {title}")
-            if len(new) > 3:
-                yield st("search", f"    … and {len(new) - 3} more")
-        except Exception as exc:
-            yield st("search", f"  → query failed: {exc}")
+    if "scholarly" in selected_sources:
+        for i, query in enumerate(scholarly_queries, 1):
+            yield st("search", f'Direct scholarly search ({i}/{len(scholarly_queries)}): "{query[:75]}"')
+            try:
+                results = await asyncio.to_thread(
+                    _search_papers, query, scholarly_limit, scopus_key
+                )
+                all_papers.extend(classify_record(_enrich_scopus_record(p, query), params.topic) for p in results)
+                yield st("search", f"  Scopus -> {len(results)} records")
+            except Exception as exc:
+                yield st("search", f"  Scopus failed: {exc}")
 
-    yield st("search", f"Search complete — {len(all_papers)} total papers ({len(all_papers) - len(existing_papers)} new)")
+            for source_name, fn in (
+                ("OpenAlex", search_openalex),
+                ("Semantic Scholar", search_semantic_scholar),
+                ("Crossref", search_crossref),
+            ):
+                records, error = await asyncio.to_thread(run_source_safely, source_name, fn, query, scholarly_limit)
+                if records:
+                    all_papers.extend(classify_record(record, params.topic) for record in records)
+                yield st("search", f"  {source_name} -> {len(records)} records" + (f" ({error})" if error else ""))
+
+        for i, query in enumerate(adjacent_queries, 1):
+            yield st("search", f'Adjacent methods/background search ({i}/{len(adjacent_queries)}): "{query[:75]}"')
+            for source_name, fn in (
+                ("Scopus", lambda q, limit: [_enrich_scopus_record(p, q) for p in _search_papers(q, limit, scopus_key)]),
+                ("OpenAlex", search_openalex),
+                ("Semantic Scholar", search_semantic_scholar),
+            ):
+                records, error = await asyncio.to_thread(run_source_safely, source_name, fn, query, adjacent_limit)
+                if records:
+                    all_papers.extend(classify_record(record, params.topic) for record in records)
+                yield st("search", f"  {source_name} -> {len(records)} records" + (f" ({error})" if error else ""))
+    else:
+        yield st("search", "Skipped scholarly indexes by user selection")
+
+    if "official" in selected_sources or "trusted_web" in selected_sources:
+        for i, query in enumerate(official_queries, 1):
+            yield st("search", f'Official/trusted-document search ({i}/{len(official_queries)}): "{query[:75]}"')
+            source_fns = []
+            if "official" in selected_sources:
+                source_fns.extend((("Data.gov", search_data_gov), ("OSTI", search_osti)))
+            if "official" in selected_sources or "trusted_web" in selected_sources:
+                source_fns.append(("SerpAPI trusted web", search_serpapi_trusted))
+            for source_name, fn in source_fns:
+                records, error = await asyncio.to_thread(run_source_safely, source_name, fn, query, official_limit)
+                if records:
+                    all_papers.extend(classify_record(record, params.topic) for record in records)
+                yield st("search", f"  {source_name} -> {len(records)} records" + (f" ({error})" if error else ""))
+    else:
+        yield st("search", "Skipped official/trusted web retrieval by user selection")
+
+    all_papers = dedupe_records(all_papers)
+    evidence_counts = _evidence_counts(all_papers)
+    direct_sources = [p for p in all_papers if p.get("relevance_bucket") == "direct"]
+    adjacent_sources = [p for p in all_papers if p.get("relevance_bucket") == "adjacent"]
+    transfer_sources = [p for p in all_papers if p.get("relevance_bucket") == "transfer_only"]
+    synthesis_sources = [
+        p for p in all_papers
+        if p.get("relevance_bucket") in {"direct", "adjacent"}
+        and p.get("citation_role") != "exclude from synthesis"
+    ]
+    if not synthesis_sources:
+        synthesis_sources = direct_sources + adjacent_sources
+
+    yield st(
+        "classify",
+        "Evidence governance complete — "
+        f"{evidence_counts['direct']} direct, {evidence_counts['adjacent']} adjacent, "
+        f"{evidence_counts['transfer_only']} transfer-only excluded",
+    )
+    summary = _source_summary(all_papers)
+    if summary:
+        yield st("classify", f"Source mix: {summary[:240]}")
 
     # ── Step 4: Synthesis ───────────────────────────────────────────────────
+    minimum_direct_sources = 5 if params.depth >= 15 else 3
+    low_direct_warning = len(direct_sources) < minimum_direct_sources
     synth_prompt = f"""You are writing an academic literature review on:
 "{params.topic}"
 
-Papers available (use ONLY these — do not invent citations):
-{json.dumps(all_papers, indent=2)}
+Evidence-governed source set (use ONLY these; do not invent citations):
+{json.dumps(synthesis_sources, indent=2)}
+
+Excluded transfer-only sources (do NOT cite these in main findings):
+{json.dumps(transfer_sources[:20], indent=2)}
+
+Scopus/OpenAlex/Semantic Scholar/Crossref/official-document queries used:
+{json.dumps(query_plan, indent=2)}
+
+Evidence governance:
+- Every source has source_type, evidence_tier, relevance_bucket, and citation_role.
+- Direct evidence studies the topic itself or its applied implementation.
+- Adjacent evidence may support background, methods, or gaps only.
+- Transfer-only evidence must not be used as proof that an approach works for the target topic.
+- Tier 1 = peer-reviewed journal/systematic review/major conference proceeding.
+- Tier 2 = government scientific report, regulator guidance, federal/state technical report, or official utility evaluation.
+- Tier 3 = university/professional-society/consultant technical report.
+- Tier 4 = trustworthy context only; do not use for technical effectiveness claims.
+- Direct source count: {len(direct_sources)}. Minimum direct sources for a full evidence synthesis: {minimum_direct_sources}.
+- If direct evidence is below the minimum, explicitly state that direct evidence is limited and keep the review honest instead of padding with transferable domains.
+- Official reports and utility documents without DOIs may be cited by title/organization/year when their url/source is supplied.
 
 Write a complete literature review with these sections:
 1. Executive Summary (1-2 paragraphs)
-2. Background & Scope (topic definition, papers reviewed)
-3. Thematic Sections (3-6 themes, narrative prose — NOT a bullet list of papers)
-4. Key Papers Table (columns: Title | First Author | Year | DOI | One-sentence contribution)
-5. Research Gaps & Open Questions
-6. [REFERENCES PLACEHOLDER]
+2. Background & Scope (topic definition, papers reviewed, sources and queries used)
+3. Evidence Base & Governance (direct/adjacent/transfer-only counts; source tier interpretation)
+4. Thematic Sections (3-6 themes, narrative prose — NOT a bullet list of papers)
+5. Key Sources Table (columns: Title | First Author/Organization | Year | DOI/URL | Source Type | Evidence Tier | Relevance | One-sentence contribution)
+6. Research Gaps & Open Questions
+7. Excluded Transfer-Only Sources (brief table with reason excluded; omit if none)
+8. [REFERENCES PLACEHOLDER]
 
 Citation rules:
 - AGU inline format: (Author et al., Year) for 3+ authors; (Author & Author, Year) for 2; (Author, Year) for 1
-- Only cite papers from the list above
+- Only cite sources from the evidence-governed source set above
+- Cite direct evidence for findings about the target topic
+- Label adjacent evidence as background or methodological context
+- Do not cite transfer-only sources except in the excluded table
 
 After the review text, on its own line, write:
 CITED_DOIS: ["doi1", "doi2", ...]
 
 Write the complete review now:"""
 
-    yield st("synthesize", f"{llm_label} running — synthesizing {len(all_papers)} papers...")
+    yield st("synthesize", f"{llm_label} running — synthesizing {len(synthesis_sources)} governed sources...")
     _stask = asyncio.ensure_future(asyncio.to_thread(_run_llm_result_sync, synth_prompt, params.llm_backend, 360, 12000))
     _sbeats = 0
     while not _stask.done():
@@ -726,14 +948,15 @@ Write the complete review now:"""
     yield st("synthesize",
              f"Done — draft complete, {len(cited_dois)} inline citations identified")
 
-    # ── Step 5a: Critic — DOI existence (Pass 1) ───────────────────────────
-    yield st("verify", f"Critic Pass 1 — checking {len(cited_dois)} DOIs exist in Scopus…")
+    # ── Step 5a: Critic — DOI / official URL existence (Pass 1) ────────────
+    yield st("verify", f"Critic Pass 1 — checking {len(cited_dois)} cited DOIs in Scopus/Crossref…")
     verified_dois: list[str] = []
     failed_dois:   list[str] = []
 
     papers_by_doi = {p["doi"].lower(): p for p in all_papers if p.get("doi")}
 
     for doi in cited_dois:
+        doi = normalize_doi(doi)
         yield st("verify", f"  verify_doi → {doi}")
         try:
             exists = await asyncio.to_thread(_verify_doi, doi, scopus_key)
@@ -741,14 +964,35 @@ Write the complete review now:"""
                 verified_dois.append(doi)
                 yield st("verify", f"    ✓ exists in Scopus")
             else:
-                failed_dois.append(doi)
-                yield st("verify", f"    ✗ DOI not found — flagged FAILED_EXISTENCE")
+                crossref_exists = await asyncio.to_thread(verify_crossref_doi, doi)
+                if crossref_exists:
+                    verified_dois.append(doi)
+                    yield st("verify", f"    ✓ exists in Crossref (not indexed by Scopus)")
+                else:
+                    failed_dois.append(doi)
+                    yield st("verify", f"    ✗ DOI not found in Scopus or Crossref — flagged FAILED_EXISTENCE")
         except Exception as exc:
-            failed_dois.append(doi)
-            yield st("verify", f"    ✗ verify error: {exc}")
+            try:
+                crossref_exists = await asyncio.to_thread(verify_crossref_doi, doi)
+            except Exception:
+                crossref_exists = False
+            if crossref_exists:
+                verified_dois.append(doi)
+                yield st("verify", f"    ✓ Scopus error, but Crossref verifies DOI")
+            else:
+                failed_dois.append(doi)
+                yield st("verify", f"    ✗ verify error: {exc}")
+
+    verified_url_sources = [
+        p for p in synthesis_sources
+        if not p.get("doi") and trusted_url_is_verifiable(p)
+    ]
+    if verified_url_sources:
+        yield st("verify", f"  Trusted official URLs accepted for {len(verified_url_sources)} no-DOI sources")
 
     yield st("verify",
-             f"Pass 1 complete — {len(verified_dois)} exist, {len(failed_dois)} not found")
+             f"Pass 1 complete — {len(verified_dois)} DOIs verified, "
+             f"{len(verified_url_sources)} official no-DOI sources accepted, {len(failed_dois)} not found")
 
     # ── Step 5b: Critic — Abstract relevance (Pass 2) ──────────────────────
     abstract_skip_msg: str | None = None  # set if institutional access is unavailable
@@ -822,13 +1066,18 @@ Write the complete review now:"""
                  f"{len(truly_unsupported)} unsupported (will be flagged)")
 
     # ── Step 6: Save to Zotero ──────────────────────────────────────────────
-    # Include replacement papers in the save list
+    # Include replacement papers and verified official no-DOI sources in the save list.
     replacement_papers = list(replacements.values())
+    existing_urls = {p.get("url", "").lower() for p in existing_papers if p.get("url")}
     all_verified_papers = [
         papers_by_doi[doi.lower()]
         for doi in verified_dois
         if doi.lower() in papers_by_doi and doi.lower() not in existing_dois
     ] + [p for p in replacement_papers if p.get("doi", "").lower() not in existing_dois]
+    all_verified_papers.extend(
+        p for p in verified_url_sources
+        if p.get("url", "").lower() not in existing_urls
+    )
 
     yield st("zotero_save", f"Saving {len(all_verified_papers)} verified papers to Zotero…")
     saved = 0
@@ -857,7 +1106,7 @@ Write the complete review now:"""
 
     # ── Step 7: Assemble & save ─────────────────────────────────────────────
     yield st("saving", "Assembling final document…")
-    n_papers_total  = len(papers_by_doi)
+    n_papers_total  = len(synthesis_sources)
     n_verified_dois = len(verified_dois)
     n_replaced      = len(replacements)
     n_unsupported   = len([d for d in failed_dois if d not in replacements])
@@ -870,6 +1119,10 @@ Write the complete review now:"""
         n_verified=n_verified_dois,
         n_replaced=n_replaced,
         n_unsupported=n_unsupported,
+        n_direct=evidence_counts["direct"],
+        n_adjacent=evidence_counts["adjacent"],
+        n_transfer=evidence_counts["transfer_only"],
+        n_url_verified=len(verified_url_sources),
         zotero_name=collection_name,
         collection_key=collection_key,
         llm_backend_label=metadata_llm_label,

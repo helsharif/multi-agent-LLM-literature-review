@@ -44,6 +44,7 @@ export default function Home() {
           format: values.format,
           zotero_collection: values.zoteroCollection,
           llm_backend: values.llmBackend,
+          source_categories: values.sourceCategories,
         }),
       });
 
@@ -125,7 +126,7 @@ export default function Home() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Auto Literature Review</h1>
           <p className="text-slate-400 text-sm">
-            Scopus · Zotero · Selectable LLM
+            Multi-source retrieval · Zotero · Selectable LLM
           </p>
         </div>
       </header>
@@ -161,7 +162,7 @@ export default function Home() {
       </main>
 
       <footer className="text-center text-slate-400 text-xs py-4">
-        Auto Literature Review · Local instance · Powered by Scopus, Zotero &amp; selectable LLMs
+        Auto Literature Review · Local instance · Powered by governed retrieval, Zotero &amp; selectable LLMs
       </footer>
     </div>
   );

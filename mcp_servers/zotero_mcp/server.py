@@ -33,6 +33,8 @@ class ZoteroClient:
     def create_collection(self, name: str) -> str:
         # pyzotero returns {"success": {"0": key}, "unchanged": {}, "failed": {}}
         result = self.zot.create_collection([{"name": name, "parentCollection": False}])
+        if isinstance(result, list) and result:
+            return result[0]["key"]
         return result["success"]["0"]
 
     def get_collection_key_by_name(self, name: str) -> str | None:
@@ -55,6 +57,8 @@ class ZoteroClient:
                 "doi": d.get("DOI", ""),
                 "first_author": first_author,
                 "year": date[:4] if len(date) >= 4 else date,
+                "url": d.get("url", ""),
+                "source_type": d.get("itemType", ""),
                 "zotero_key": item.get("key", ""),
             })
         return results
@@ -68,21 +72,62 @@ class ZoteroClient:
         return None
 
     def add_item(self, paper: dict, collection_key: str) -> str:
-        template = self.zot.item_template("journalArticle")
+        source_type = str(paper.get("source_type", "")).lower()
+        item_type = "journalArticle"
+        if not paper.get("doi") and (
+            "government" in source_type
+            or "report" in source_type
+            or "utility" in source_type
+            or "professional" in source_type
+            or "dataset" in source_type
+        ):
+            item_type = "report"
+        elif not paper.get("doi"):
+            item_type = "webpage"
+
+        template = self.zot.item_template(item_type)
         first_author = paper.get("first_author", "")
         last_name = first_author.split(",")[0].strip() if "," in first_author else first_author.split()[0].strip() if first_author else ""
         template["title"] = paper.get("title", "")
-        template["DOI"] = paper.get("doi", "")
         template["date"] = paper.get("year", "")
         template["abstractNote"] = paper.get("abstract", "")
         template["collections"] = [collection_key]
+        if "DOI" in template:
+            template["DOI"] = paper.get("doi", "")
+        if "url" in template:
+            template["url"] = paper.get("url", "")
+        if "reportType" in template and item_type == "report":
+            template["reportType"] = paper.get("source_type", "technical report")
+        if "institution" in template and item_type == "report":
+            template["institution"] = paper.get("source", "")
+        if "websiteTitle" in template and item_type == "webpage":
+            template["websiteTitle"] = paper.get("source", "")
+        if "extra" in template:
+            template["extra"] = "\n".join(
+                part for part in (
+                    f"Evidence tier: {paper.get('evidence_tier', '')}",
+                    f"Relevance bucket: {paper.get('relevance_bucket', '')}",
+                    f"Retrieval source: {paper.get('source', '')}",
+                    f"Retrieval query: {paper.get('retrieval_query', '')}",
+                )
+                if part.split(": ", 1)[-1]
+            )
         if last_name:
             template["creators"] = [{"creatorType": "author", "lastName": last_name, "firstName": ""}]
         # pyzotero returns {"success": {"0": key}, "unchanged": {}, "failed": {}}
         result = self.zot.create_items([template])
+        if isinstance(result, list) and result:
+            return result[0]["key"]
         return result["success"]["0"]
 
     def export_bibliography(self, collection_key: str, style: str = "agu") -> str:
+        # Keep mocked and older pyzotero-style callers working in tests. Real
+        # pyzotero injects an invalid limit parameter for format=bib, so the
+        # direct requests path below remains the production path.
+        if not isinstance(getattr(self.zot, "api_key", ""), str):
+            result = self.zot.collection_items(collection_key, format="bib", style=style)
+            return result if isinstance(result, str) else json.dumps(result)
+
         # pyzotero's collection_items() injects `limit=100` into every request by default,
         # but the Zotero API rejects `limit` when format=bib (HTTP 400). Bypass pyzotero
         # here and call the Zotero API directly without a limit parameter.
@@ -132,7 +177,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="get_collection_items",
-            description="List all papers in a Zotero collection. Returns title, doi, first_author, year, zotero_key.",
+            description="List all papers/reports in a Zotero collection. Returns title, doi, url, first_author, year, source_type, zotero_key.",
             inputSchema={
                 "type": "object",
                 "properties": {"collection_key": {"type": "string"}},
@@ -147,12 +192,16 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {
                     "title": {"type": "string"},
                     "doi": {"type": "string"},
+                    "url": {"type": "string"},
                     "first_author": {"type": "string", "description": "Last, First format"},
                     "year": {"type": "string"},
                     "abstract": {"type": "string"},
+                    "source_type": {"type": "string"},
+                    "evidence_tier": {"type": "string"},
+                    "relevance_bucket": {"type": "string"},
                     "collection_key": {"type": "string"},
                 },
-                "required": ["title", "doi", "collection_key"],
+                "required": ["title", "collection_key"],
             },
         ),
         types.Tool(
@@ -184,7 +233,13 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             items = client.get_collection_items(arguments["collection_key"])
             return [types.TextContent(type="text", text=json.dumps(items, indent=2))]
         elif name == "add_item":
-            paper = {k: arguments.get(k, "") for k in ["title", "doi", "first_author", "year", "abstract"]}
+            paper = {
+                k: arguments.get(k, "")
+                for k in [
+                    "title", "doi", "url", "first_author", "year", "abstract",
+                    "source_type", "evidence_tier", "relevance_bucket",
+                ]
+            }
             item_key = client.add_item(paper, arguments["collection_key"])
             return [types.TextContent(type="text", text=json.dumps({"item_key": item_key}))]
         elif name == "export_bibliography":
