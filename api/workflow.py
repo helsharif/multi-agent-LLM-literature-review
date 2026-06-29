@@ -655,6 +655,182 @@ def _selected_source_categories(params: ReviewParams) -> set[str]:
     return selected or {"scholarly", "official"}
 
 
+def _source_rank(record: dict) -> tuple[int, int, int, int]:
+    bucket_rank = {"direct": 0, "adjacent": 1, "transfer_only": 2}.get(record.get("relevance_bucket"), 3)
+    tier_rank = {"Tier 1": 0, "Tier 2": 1, "Tier 3": 2, "Tier 4": 3}.get(record.get("evidence_tier"), 4)
+    source_rank = {
+        "Scopus": 0,
+        "OpenAlex": 1,
+        "Semantic Scholar": 2,
+        "Crossref": 3,
+        "SerpAPI trusted web": 4,
+        "Data.gov": 5,
+        "OSTI": 6,
+        "Zotero existing": -1,
+    }.get(record.get("source"), 9)
+    citation_count = int(record.get("citation_count") or 0)
+    return (bucket_rank, tier_rank, source_rank, -citation_count)
+
+
+def _clip_text(text: str, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip()
+    return f"{cut}..."
+
+
+def _compact_source(record: dict) -> dict:
+    return {
+        "title": record.get("title", ""),
+        "first_author": record.get("first_author", ""),
+        "year": record.get("year", ""),
+        "doi": record.get("doi", ""),
+        "url": record.get("url", ""),
+        "source": record.get("source", ""),
+        "source_type": record.get("source_type", ""),
+        "evidence_tier": record.get("evidence_tier", ""),
+        "relevance_bucket": record.get("relevance_bucket", ""),
+        "citation_role": record.get("citation_role", ""),
+        "relevance_reason": record.get("relevance_reason", ""),
+        "retrieval_query": record.get("retrieval_query", ""),
+        "abstract_snippet": _clip_text(
+            record.get("abstract_snippet") or record.get("abstract") or "",
+            700,
+        ),
+    }
+
+
+def _select_synthesis_sources(records: list[dict], depth: int) -> list[dict]:
+    eligible = [
+        record for record in records
+        if record.get("relevance_bucket") in {"direct", "adjacent"}
+        and record.get("citation_role") != "exclude from synthesis"
+    ]
+    direct = sorted(
+        [record for record in eligible if record.get("relevance_bucket") == "direct"],
+        key=_source_rank,
+    )
+    adjacent = sorted(
+        [record for record in eligible if record.get("relevance_bucket") == "adjacent"],
+        key=_source_rank,
+    )
+
+    # Keep synthesis bounded. Retrieval can be broad; drafting should see a
+    # high-quality working set instead of every plausible candidate.
+    max_total = 32 if depth >= 30 else 24
+    max_adjacent = 8 if depth >= 30 else 6
+    selected = direct[: max_total - min(max_adjacent, len(adjacent))]
+    remaining_slots = max_total - len(selected)
+    selected.extend(adjacent[: min(max_adjacent, remaining_slots)])
+    if not selected:
+        selected = (direct + adjacent)[:max_total]
+    return selected
+
+
+def _citation_role_for_bucket(bucket: str, tier: str) -> str:
+    if bucket == "direct" and tier in {"Tier 1", "Tier 2", "Tier 3"}:
+        return "core evidence"
+    if bucket == "adjacent" and tier in {"Tier 1", "Tier 2", "Tier 3"}:
+        return "background or methods only"
+    if tier == "Tier 4":
+        return "context only"
+    return "exclude from synthesis"
+
+
+def _classification_payload(records: list[dict]) -> list[dict]:
+    payload = []
+    for idx, record in enumerate(records):
+        payload.append(
+            {
+                "id": idx,
+                "title": record.get("title", ""),
+                "year": record.get("year", ""),
+                "doi": record.get("doi", ""),
+                "source": record.get("source", ""),
+                "source_type": record.get("source_type", ""),
+                "evidence_tier": record.get("evidence_tier", ""),
+                "retrieval_query": record.get("retrieval_query", ""),
+                "abstract_snippet": _clip_text(
+                    record.get("abstract_snippet") or record.get("abstract") or "",
+                    900,
+                ),
+            }
+        )
+    return payload
+
+
+def _extract_json_array(text: str) -> list:
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if not match:
+        raise ValueError(f"No JSON array found in LLM response: {text[:300]}")
+    return json.loads(match.group())
+
+
+def _run_relevance_classifier_batch(topic: str, records: list[dict], backend: str) -> list[dict]:
+    prompt = f"""You are the relevance-classification critic for a scientific literature review.
+
+User topic:
+{topic}
+
+Classify each retrieved source relative to the user topic.
+
+Labels:
+- direct: The source directly studies the target phenomenon, target domain, main method family, data type, evaluation setting, or a very close operational variant of the user's topic. It does NOT need to contain every word in the topic. If a source would clearly belong in the main evidence table for this review, mark direct.
+- adjacent: The source is useful for background, measurement, theory, related variables, related methods, or a neighboring domain, but should not be used as main evidence for the exact target topic.
+- transfer_only: The source is mainly an analogy from another field or shares only generic method words; it should normally be excluded from synthesis.
+
+Important:
+- Do not require exact phrase matching.
+- Do not demote a source merely because it omits one qualifier from the topic if it directly addresses the core review question.
+- For example, for a topic about ML chlorophyll-a prediction in inland lakes from satellite imagery, a paper on machine-learning chlorophyll-a retrieval in inland lakes is direct even if it does not explicitly say "photic zone".
+- Be conservative about truly unrelated ML papers returned by keyword overlap.
+
+Sources:
+{json.dumps(_classification_payload(records), indent=2)}
+
+Return ONLY a JSON array with one object per source:
+[
+  {{"id": 0, "relevance_bucket": "direct|adjacent|transfer_only", "reason": "short reason"}},
+  ...
+]
+"""
+    raw = _run_llm_sync(prompt, backend, 180, 6000)
+    parsed = _extract_json_array(raw)
+    if not isinstance(parsed, list):
+        raise ValueError("Classifier response was not a JSON array")
+    return parsed
+
+
+def _apply_relevance_classifications(records: list[dict], classifications: list[dict]) -> int:
+    applied = 0
+    by_id = {}
+    for item in classifications:
+        try:
+            idx = int(item.get("id"))
+        except Exception:
+            continue
+        bucket = str(item.get("relevance_bucket", "")).strip().lower()
+        if bucket not in {"direct", "adjacent", "transfer_only"}:
+            continue
+        by_id[idx] = {
+            "bucket": bucket,
+            "reason": str(item.get("reason", "")).strip(),
+        }
+
+    for idx, record in enumerate(records):
+        update = by_id.get(idx)
+        if not update:
+            continue
+        bucket = update["bucket"]
+        record["relevance_bucket"] = bucket
+        record["citation_role"] = _citation_role_for_bucket(bucket, record.get("evidence_tier", ""))
+        if update["reason"]:
+            record["relevance_reason"] = update["reason"]
+        applied += 1
+    return applied
+
+
 # ---------------------------------------------------------------------------
 # Main async generator
 # ---------------------------------------------------------------------------
@@ -847,17 +1023,40 @@ Rules:
         yield st("search", "Skipped official/trusted web retrieval by user selection")
 
     all_papers = dedupe_records(all_papers)
+    yield st("classify", f"LLM relevance critic classifying {len(all_papers)} deduplicated sources...")
+    classifier_applied = 0
+    classifier_failed = False
+    batch_size = 24
+    for start in range(0, len(all_papers), batch_size):
+        batch = all_papers[start : start + batch_size]
+        batch_no = start // batch_size + 1
+        total_batches = (len(all_papers) + batch_size - 1) // batch_size
+        yield st("classify", f"  Relevance critic batch {batch_no}/{total_batches} ({len(batch)} sources)")
+        try:
+            classifications = await asyncio.to_thread(
+                _run_relevance_classifier_batch,
+                params.topic,
+                batch,
+                params.llm_backend,
+            )
+            classifier_applied += _apply_relevance_classifications(batch, classifications)
+        except Exception as exc:
+            classifier_failed = True
+            yield st(
+                "classify",
+                f"  LLM relevance critic failed for batch {batch_no}; using fallback labels for this batch: {exc}",
+            )
+    if not classifier_failed:
+        yield st("classify", f"LLM relevance critic applied labels to {classifier_applied}/{len(all_papers)} sources")
+    else:
+        yield st("classify", f"LLM relevance critic applied labels to {classifier_applied}/{len(all_papers)} sources; fallback labels used where needed")
+
     evidence_counts = _evidence_counts(all_papers)
     direct_sources = [p for p in all_papers if p.get("relevance_bucket") == "direct"]
     adjacent_sources = [p for p in all_papers if p.get("relevance_bucket") == "adjacent"]
     transfer_sources = [p for p in all_papers if p.get("relevance_bucket") == "transfer_only"]
-    synthesis_sources = [
-        p for p in all_papers
-        if p.get("relevance_bucket") in {"direct", "adjacent"}
-        and p.get("citation_role") != "exclude from synthesis"
-    ]
-    if not synthesis_sources:
-        synthesis_sources = direct_sources + adjacent_sources
+    synthesis_sources = _select_synthesis_sources(all_papers, params.depth)
+    compact_synthesis_sources = [_compact_source(p) for p in synthesis_sources]
 
     yield st(
         "classify",
@@ -868,6 +1067,12 @@ Rules:
     summary = _source_summary(all_papers)
     if summary:
         yield st("classify", f"Source mix: {summary[:240]}")
+    if len(synthesis_sources) < (evidence_counts["direct"] + evidence_counts["adjacent"]):
+        yield st(
+            "classify",
+            f"Synthesis working set capped at {len(synthesis_sources)} highest-priority sources "
+            f"from {evidence_counts['direct'] + evidence_counts['adjacent']} eligible records",
+        )
 
     # ── Step 4: Synthesis ───────────────────────────────────────────────────
     minimum_direct_sources = 5 if params.depth >= 15 else 3
@@ -876,7 +1081,7 @@ Rules:
 "{params.topic}"
 
 Evidence-governed source set (use ONLY these; do not invent citations):
-{json.dumps(synthesis_sources, indent=2)}
+{json.dumps(compact_synthesis_sources, indent=2)}
 
 Excluded transfer-only sources (do NOT cite these in main findings):
 {json.dumps(transfer_sources[:20], indent=2)}
@@ -919,15 +1124,16 @@ CITED_DOIS: ["doi1", "doi2", ...]
 
 Write the complete review now:"""
 
+    synthesis_timeout = 600
     yield st("synthesize", f"{llm_label} running — synthesizing {len(synthesis_sources)} governed sources...")
-    _stask = asyncio.ensure_future(asyncio.to_thread(_run_llm_result_sync, synth_prompt, params.llm_backend, 360, 12000))
+    _stask = asyncio.ensure_future(asyncio.to_thread(_run_llm_result_sync, synth_prompt, params.llm_backend, synthesis_timeout, 12000))
     _sbeats = 0
     while not _stask.done():
         done_set, _ = await asyncio.wait({_stask}, timeout=5.0)
         if not done_set:
             _sbeats += 1
             yield hb("synthesize",
-                     f"{llm_label} active — writing review ({_sbeats * 5}s / ~1-3 min)")
+                     f"{llm_label} active — writing review ({_sbeats * 5}s / ~2-8 min)")
 
     try:
         synth_result = _stask.result()

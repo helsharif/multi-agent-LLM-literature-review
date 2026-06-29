@@ -9,54 +9,35 @@ The workflow deliberately keeps this layer lightweight and cheap:
 from __future__ import annotations
 
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
 import requests
+from pyalex import Works, config as pyalex_config
 
 PROJECT_ROOT = Path(__file__).parent.parent
 KEYS_FILE = PROJECT_ROOT / "secrets" / "keys.txt"
 
-DIRECT_LSL_TERMS = (
-    "lead service line",
-    "lead service lines",
-    "lead water line",
-    "lead water lines",
-    "lead pipe",
-    "lead pipes",
-    "lsl",
-    "service line inventory",
-    "service line inventories",
-)
+TOPIC_STOPWORDS = {
+    "about", "across", "after", "again", "against", "also", "among", "analysis",
+    "approach", "approaches", "based", "being", "between", "both", "case",
+    "concentration", "concentrations", "data", "defined", "developing",
+    "effect", "effects", "estimate", "estimating", "evaluation", "evaluating",
+    "from", "into", "method", "methods", "model", "modeling", "models",
+    "monitoring", "over", "paper", "papers", "prediction", "research",
+    "review", "study", "studies", "support", "system", "systems", "their",
+    "through", "using", "with", "within",
+}
 
-DIRECT_ACTION_TERMS = (
-    "machine learning",
-    "predictive",
-    "prediction",
-    "model",
-    "inventory",
-    "identification",
-    "classification",
-    "prioritization",
-    "prioritize",
-    "replacement",
-    "excavation",
-    "verification",
-)
-
-ADJACENT_TERMS = (
-    "drinking water",
-    "lead exposure",
-    "water contamination",
-    "corrosion",
-    "water quality",
-    "environmental justice",
-    "geospatial",
-    "infrastructure",
-    "positive unlabeled",
-    "spatial cross validation",
-)
+METHOD_TERMS = {
+    "ai", "algorithm", "algorithms", "artificial intelligence", "classification",
+    "cnn", "deep learning", "gradient boosting", "learning", "machine learning",
+    "ml", "model", "models", "neural network", "prediction", "random forest",
+    "regression", "remote sensing", "satellite", "svm", "xgboost",
+}
 
 TRUSTED_WEB_DOMAINS = (
     "epa.gov",
@@ -75,6 +56,9 @@ TRUSTED_WEB_DOMAINS = (
     "awwa.org",
     "awwa-water.org",
 )
+
+_OPENALEX_LOCK = threading.Lock()
+_OPENALEX_LAST_REQUEST_AT = 0.0
 
 
 def load_keys(keys_path: Path = KEYS_FILE) -> dict[str, str]:
@@ -129,17 +113,11 @@ def _first_author_from_openalex(authorships: list[dict]) -> str:
 
 
 def search_openalex(query: str, limit: int) -> list[dict]:
-    params = {
-        "search": query,
-        "per-page": max(1, min(limit, 50)),
-        "select": "id,doi,title,display_name,publication_year,abstract_inverted_index,authorships,primary_location,type,cited_by_count,referenced_works",
-    }
-    email = optional_key("OPENALEX_EMAIL")
-    if email:
-        params["mailto"] = email
-    payload = _safe_get_json("https://api.openalex.org/works", params=params)
+    semantic_query = _semantic_query_text(query)
+    api_key = optional_key("OPENALEX_API_KEY")
+    items = _openalex_semantic_items(semantic_query, max(1, min(limit, 25)), api_key)
     records = []
-    for item in payload.get("results", []):
+    for item in items:
         doi = normalize_doi(item.get("doi"))
         title = item.get("title") or item.get("display_name") or ""
         abstract = _abstract_from_inverted_index(item.get("abstract_inverted_index"))
@@ -155,11 +133,79 @@ def search_openalex(query: str, limit: int) -> list[dict]:
                 "source": "OpenAlex",
                 "source_type": _source_type_from_openalex(item),
                 "evidence_tier": "Tier 1",
-                "retrieval_query": query,
+                "retrieval_query": semantic_query,
                 "citation_count": item.get("cited_by_count", 0),
             }
         )
     return records
+
+
+def _openalex_semantic_items(query: str, limit: int, api_key: str = "") -> list[dict]:
+    attempts = _openalex_semantic_attempts(query)
+    last_error = ""
+    pyalex_config.api_key = api_key or None
+    for index, attempt in enumerate(attempts):
+        try:
+            _throttle_openalex_semantic()
+            return Works().similar(attempt).get(per_page=limit)
+        except Exception as exc:
+            last_error = str(exc)
+            if "429" in last_error or "rate limit" in last_error.lower():
+                time.sleep(max(1.1, _retry_after_seconds(last_error)))
+                continue
+            if "504" not in last_error and "gateway timeout" not in last_error.lower():
+                break
+            time.sleep(0.8 * (index + 1))
+            continue
+        if not last_error:
+            break
+    raise RuntimeError(last_error or "OpenAlex semantic search failed")
+
+
+def _throttle_openalex_semantic() -> None:
+    global _OPENALEX_LAST_REQUEST_AT
+    with _OPENALEX_LOCK:
+        now = time.monotonic()
+        wait = 1.15 - (now - _OPENALEX_LAST_REQUEST_AT)
+        if wait > 0:
+            time.sleep(wait)
+        _OPENALEX_LAST_REQUEST_AT = time.monotonic()
+
+
+def _retry_after_seconds(text: str) -> float:
+    match = re.search(r'"retryAfter"\s*:\s*([0-9.]+)', text or "")
+    if not match:
+        return 1.1
+    try:
+        return float(match.group(1)) + 0.2
+    except ValueError:
+        return 1.1
+
+
+def _openalex_semantic_attempts(query: str) -> list[str]:
+    words = query.split()
+    attempts = [query]
+    if len(words) > 12:
+        attempts.append(" ".join(words[:12]))
+    if len(words) > 8:
+        attempts.append(" ".join(words[:8]))
+    compact = " ".join(word for word in words if len(word) > 3)
+    if compact and compact not in attempts:
+        attempts.append(compact[:1000])
+    return list(dict.fromkeys(attempts))
+
+
+def _semantic_query_text(query: str) -> str:
+    text = str(query or "")
+    # Semantic search works best with natural-language descriptions, not
+    # Boolean syntax. Keep quoted phrases as words, strip operators, and
+    # collapse punctuation that can make OpenAlex treat the request as broad.
+    text = re.sub(r"\b(?:AND|OR|NOT)\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bsite:[^\s)]+", " ", text, flags=re.IGNORECASE)
+    text = text.replace("*", " ")
+    text = re.sub(r"[()\"']", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:2000] or query[:2000]
 
 
 def _abstract_from_inverted_index(index: dict | None) -> str:
@@ -175,8 +221,7 @@ def _abstract_from_inverted_index(index: dict | None) -> str:
 def _source_type_from_openalex(item: dict) -> str:
     work_type = str(item.get("type") or "").lower()
     source = (
-        (item.get("primary_location") or {})
-        .get("source", {})
+        ((item.get("primary_location") or {}).get("source") or {})
         .get("type", "")
     )
     if "proceed" in work_type or "conference" in str(source).lower():
@@ -433,18 +478,39 @@ def _tier_from_url(url: str) -> str:
 
 
 def classify_record(record: dict, topic: str = "") -> dict:
-    text = " ".join(
+    text = _normalize_relevance_text(" ".join(
         str(record.get(key, ""))
         for key in ("title", "abstract_snippet", "abstract", "retrieval_query", "source_type")
-    ).lower()
+    ))
+    title_text = _normalize_relevance_text(str(record.get("title", "")))
+    query_text = _normalize_relevance_text(str(record.get("retrieval_query", "")))
+    topic_terms = _topic_terms(topic)
+    topic_phrases = _topic_phrases(topic)
 
-    direct_lsl = any(term in text for term in DIRECT_LSL_TERMS)
-    direct_action = any(term in text for term in DIRECT_ACTION_TERMS)
-    adjacent = any(term in text for term in ADJACENT_TERMS)
+    overlap_terms = {term for term in topic_terms if term in text}
+    title_overlap = {term for term in topic_terms if term in title_text}
+    phrase_hits = {phrase for phrase in topic_phrases if phrase in text}
+    query_overlap = {term for term in topic_terms if term in query_text}
+    has_method_context = any(term in text for term in METHOD_TERMS)
 
-    if direct_lsl and direct_action:
+    overlap_ratio = len(overlap_terms) / max(1, len(topic_terms))
+    title_ratio = len(title_overlap) / max(1, len(topic_terms))
+    query_ratio = len(query_overlap) / max(1, len(topic_terms))
+
+    if (
+        len(title_overlap) >= 2
+        and (overlap_ratio >= 0.22 or len(overlap_terms) >= 4)
+        and (has_method_context or query_ratio >= 0.35 or phrase_hits)
+    ) or (
+        len(phrase_hits) >= 1
+        and len(overlap_terms) >= 3
+        and (has_method_context or title_ratio >= 0.18)
+    ) or (
+        len(title_overlap) >= 4
+        and overlap_ratio >= 0.35
+    ):
         bucket = "direct"
-    elif direct_lsl or adjacent:
+    elif overlap_ratio >= 0.12 or len(overlap_terms) >= 2 or phrase_hits:
         bucket = "adjacent"
     else:
         bucket = "transfer_only"
@@ -466,7 +532,46 @@ def classify_record(record: dict, topic: str = "") -> dict:
     out["relevance_bucket"] = bucket
     out["evidence_tier"] = tier
     out["citation_role"] = _citation_role(bucket, tier)
+    out["relevance_score"] = round(overlap_ratio, 3)
+    out["matched_topic_terms"] = sorted(overlap_terms)[:12]
     return out
+
+
+def _normalize_relevance_text(text: str) -> str:
+    text = str(text or "").lower()
+    text = text.replace("chlorophyll-a", "chlorophyll chl a")
+    text = text.replace("chlorophyll a", "chlorophyll chl a")
+    text = text.replace("chl-a", "chlorophyll chl a")
+    text = text.replace("chla", "chlorophyll chl a")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _topic_terms(topic: str) -> set[str]:
+    normalized = _normalize_relevance_text(topic)
+    terms = {
+        token for token in normalized.split()
+        if len(token) >= 3 and token not in TOPIC_STOPWORDS
+    }
+    if "machine" in terms and "learning" in terms:
+        terms.add("machine learning")
+    if "remote" in terms and "sensing" in terms:
+        terms.add("remote sensing")
+    if "deep" in terms and "learning" in terms:
+        terms.add("deep learning")
+    return terms
+
+
+def _topic_phrases(topic: str) -> set[str]:
+    tokens = [
+        token for token in _normalize_relevance_text(topic).split()
+        if len(token) >= 3 and token not in TOPIC_STOPWORDS
+    ]
+    phrases = set()
+    for size in (2, 3):
+        for idx in range(0, max(0, len(tokens) - size + 1)):
+            phrases.add(" ".join(tokens[idx : idx + size]))
+    return phrases
 
 
 def _citation_role(bucket: str, tier: str) -> str:

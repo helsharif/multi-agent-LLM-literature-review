@@ -11,7 +11,7 @@ A FastAPI and Next.js research automation app that uses selectable LLM backends,
 - **Task:** Automated scientific literature review generation
 - **Domain:** Hydrology, climate, infrastructure, and environmental literature review workflows
 - **Objective:** Reduce manual literature-review overhead while preserving citation traceability
-- **Core workflow:** Evidence-aware query planning -> Scopus/OpenAlex/Semantic Scholar/Crossref/trusted official retrieval -> direct/adjacent/transfer classification -> LLM synthesis -> DOI/URL verification -> Zotero save -> AGU bibliography export
+- **Core workflow:** Evidence-aware query planning -> Scopus/OpenAlex/Semantic Scholar/Crossref/trusted official retrieval -> deduplication -> LLM relevance-critic classification -> bounded synthesis -> DOI/URL verification -> Zotero save -> AGU bibliography export
 - **LLM options:** Claude Code, OpenRouter Free Router, Gemini Flash, Qwen3 Coder, NVIDIA Nemotron Ultra, NVIDIA Nemotron Super
 - **Outputs:** Markdown, Word, and PDF review documents
 - **Provenance:** Final metadata records selected LLM backend, evidence-tier counts, DOI verification count, Zotero collection, and assigned OpenRouter model when using `openrouter/free`
@@ -85,21 +85,21 @@ LLM evidence-aware query plan
    v
 Multi-source retrieval
    |-- Scopus
-   |-- OpenAlex
+   |-- OpenAlex semantic search via PyAlex
    |-- Semantic Scholar
    |-- Crossref
    |-- SerpAPI trusted official domains
    |-- Data.gov / OSTI
    |
    v
-Deduplicate and classify sources
+Deduplicate and classify sources with an LLM relevance critic
    |-- direct evidence
    |-- adjacent evidence
    |-- transfer-only evidence
    |-- Tier 1-4 evidence ranking
    |
    v
-LLM literature review synthesis with governance rules
+Bounded LLM literature review synthesis with governance rules
    |
    v
 Parse CITED_DOIS marker
@@ -148,7 +148,7 @@ The synthesis prompt requires a final `CITED_DOIS` marker. The backend parses th
 
 ### Evidence Governance
 
-The retrieval workflow assigns every candidate source a `source_type`, `evidence_tier`, `relevance_bucket`, and `citation_role` before synthesis.
+The retrieval workflow assigns every candidate source a `source_type` and `evidence_tier`, then runs an LLM relevance critic to assign `relevance_bucket`, `citation_role`, and a short relevance rationale before synthesis. A lightweight deterministic classifier remains only as a fallback if a relevance-critic batch fails.
 
 | Label | Meaning | Role |
 | --- | --- | --- |
@@ -160,7 +160,7 @@ The retrieval workflow assigns every candidate source a `source_type`, `evidence
 | Tier 3 | University, professional-society, or consultant technical report | Supporting applied evidence |
 | Tier 4 | Trusted journalism or web context | Context only |
 
-The synthesis prompt enforces a minimum direct-evidence rule. If direct evidence is sparse, the final review must say so explicitly and cannot pad the main findings with transferable examples from unrelated domains.
+The synthesis prompt enforces a minimum direct-evidence rule. If direct evidence is sparse, the final review must say so explicitly and cannot pad the main findings with transferable examples from unrelated domains. To keep long retrieval runs usable, synthesis receives a capped high-priority working set that favors direct evidence and includes only a limited adjacent-methods/background set.
 
 ### Zotero Integration
 
@@ -196,7 +196,7 @@ sebou-basin-climate-and-water-risk_2026-06-28_orfree.md
 - **Frontend:** Next.js, React, Tailwind CSS
 - **Backend:** FastAPI, Python async workflow orchestration
 - **LLM backends:** Claude Code CLI, OpenRouter Chat Completions API
-- **Scholarly search:** Scopus, OpenAlex, Semantic Scholar, Crossref
+- **Scholarly search:** Scopus, OpenAlex semantic search via PyAlex, Semantic Scholar, Crossref
 - **Official and gray-literature discovery:** SerpAPI constrained to trusted domains, Data.gov, OSTI
 - **Citation manager:** Zotero API
 - **Documents:** Markdown, python-docx, WeasyPrint
@@ -265,7 +265,7 @@ ZOTERO_USER_ID=<your Zotero numeric user ID>
 OPENROUTER_API_KEY=<your OpenRouter API key, optional unless using OpenRouter backends>
 SERPAPI_API_KEY=<your SerpAPI key, optional for trusted web/official document search>
 SEMANTIC_SCHOLAR_API_KEY=<your Semantic Scholar key, optional but improves rate limits>
-OPENALEX_EMAIL=<your email, optional polite-pool identifier>
+OPENALEX_API_KEY=<your OpenAlex API key, optional but improves limits/features>
 ```
 
 `secrets/keys.txt` is excluded from Git. OpenAlex, Crossref, Data.gov, and OSTI can be used without paid keys; SerpAPI is only used when `SERPAPI_API_KEY` is present.
@@ -349,7 +349,8 @@ This project is designed around reproducible research automation:
 - Zotero collection metadata is recorded in the final report
 - LLM backend and OpenRouter-assigned model are recorded in metadata
 - DOI/URL verification is separated from prose generation
-- direct, adjacent, and transfer-only evidence are classified before synthesis
+- direct, adjacent, and transfer-only evidence are classified by an LLM relevance critic before synthesis
+- synthesis uses a bounded high-priority source set to avoid timeout-prone oversized prompts
 - frontend, backend, and conversion logic are modularized
 
 Recommended checks:
@@ -395,8 +396,8 @@ This project highlights:
 - applied GenAI product engineering
 - scientific-literature automation
 - API integration with Scopus and Zotero
-- multi-source retrieval with OpenAlex, Semantic Scholar, Crossref, SerpAPI, Data.gov, and OSTI
-- evidence-tier governance for peer-reviewed and gray literature
+- multi-source retrieval with Scopus, OpenAlex/PyAlex semantic search, Semantic Scholar, Crossref, SerpAPI, Data.gov, and OSTI
+- evidence-tier governance plus LLM-based relevance classification for peer-reviewed and gray literature
 - citation-grounded LLM workflow design
 - fallback model routing and LLM provenance tracking
 - FastAPI and Next.js full-stack development

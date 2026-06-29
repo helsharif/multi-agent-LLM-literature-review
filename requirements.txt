@@ -1,5 +1,6 @@
 mcp>=1.0.0
 requests>=2.31.0
+pyalex>=0.21
 pyzotero>=1.5.18
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
